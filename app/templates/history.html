@@ -1,0 +1,406 @@
+{% extends "base.html" %}
+{% block title %}History · Soulseekarr{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h3 mb-1">History</h1>
+    <div class="text-secondary small">Recent Soulseekarr activity and completed download/import history.</div>
+  </div>
+  <div class="d-flex gap-2">
+    {% if active_tab == 'downloads' %}
+    <button class="btn btn-outline-danger btn-sm" type="button" id="clearDownloadedHistoryBtn">
+      <i class="fa-solid fa-trash-can me-1"></i>Clear downloaded history
+    </button>
+    {% endif %}
+    <a class="btn btn-outline-secondary btn-sm" href="/history?tab={{ active_tab }}&page={{ pagination.page }}"><i class="fa-solid fa-rotate me-1"></i>Refresh</a>
+  </div>
+</div>
+
+<ul class="nav nav-tabs mb-3" role="tablist" aria-label="History sections">
+  <li class="nav-item" role="presentation">
+    <a class="nav-link{% if active_tab == 'jobs' %} active{% endif %}" href="/history?tab=jobs"{% if active_tab == 'jobs' %} aria-current="page"{% endif %}>
+      <i class="fa-solid fa-list-check me-1"></i>Jobs
+    </a>
+  </li>
+  <li class="nav-item" role="presentation">
+    <a class="nav-link{% if active_tab == 'downloads' %} active{% endif %}" href="/history?tab=downloads"{% if active_tab == 'downloads' %} aria-current="page"{% endif %}>
+      <i class="fa-solid fa-download me-1"></i>Downloads
+    </a>
+  </li>
+</ul>
+
+{% if active_tab == 'jobs' %}
+<div class="text-secondary small mb-3">Recent Soulseekarr job activity. Refreshes every 5 seconds.</div>
+<div class="compact-table-shell jobs-table-shell">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle mb-0 compact-data-table jobs-table" id="jobsTable">
+      <thead><tr><th class="job-col-status" aria-label="Status"></th><th class="job-col-series">Series</th><th class="job-col-episode">Episode</th><th class="job-col-file">File</th><th class="job-col-updated">Updated</th><th class="job-col-info" aria-label="Details"></th></tr></thead>
+      <tbody>
+      {% for job in jobs %}
+      <tr>
+        <td class="job-status-cell" title="{{ job.status }}{% if job.message %} · {{ job.message }}{% endif %}"><i class="fa-solid {% if job.status == 'queued' %}fa-clock{% elif job.status == 'downloading' %}fa-cloud-arrow-down{% elif job.status == 'copying' %}fa-file-arrow-down{% elif job.status == 'ready' %}fa-file-circle-check{% elif job.status == 'evaluating' %}fa-scale-balanced{% elif job.status == 'importing' %}fa-right-to-bracket{% elif job.status == 'imported' %}fa-circle-check{% elif job.status == 'searched' %}fa-magnifying-glass{% elif job.status == 'skipped' %}fa-forward-step{% elif job.status in ['failed', 'rejected'] %}fa-triangle-exclamation{% elif job.status == 'cancelled' %}fa-ban{% else %}fa-circle-info{% endif %} status-icon status-icon-{{ job.status }}"></i></td>
+        <td class="job-series text-truncate fw-semibold" title="{{ job.series_title }}">{{ job.series_title }}</td>
+        <td class="job-episode text-nowrap">{{ job.episode_code or '—' }}</td>
+        {% if job.job_kind == 'search' %}
+        <td class="job-file text-truncate" title="{% if job.search_query %}{{ job.search_target_type|capitalize }} search: {{ job.search_query }} · {% endif %}{{ job.message }}">
+          {% if job.search_query %}<span class="badge text-bg-secondary me-1">{{ job.search_target_type|capitalize }}</span>searched for &quot;{{ job.search_query }}&quot;{% if job.message %} · {{ job.message }}{% endif %}{% else %}{{ job.message }}{% endif %}
+        </td>
+        {% else %}
+        <td class="job-file text-truncate" title="{{ job.remote_filename }}">{{ job.remote_filename }}</td>
+        {% endif %}
+        <td class="job-updated text-secondary text-nowrap">{{ job.updated_at }}</td>
+        <td class="job-info-cell"><button type="button" class="btn btn-link job-details-btn" data-job-id="{{ job.id }}" aria-label="Show full details for {{ job.episode_code }}" title="Full details"><i class="fa-solid fa-circle-info download-info-icon"></i></button></td>
+      </tr>
+      {% else %}<tr><td colspan="6" class="text-center text-secondary py-4">No Soulseekarr jobs yet.</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-2">
+  <div class="text-secondary small">Showing {{ pagination.start }}–{{ pagination.end }} of {{ pagination.total }} job{% if pagination.total != 1 %}s{% endif %}</div>
+  <div class="btn-group btn-group-sm" role="group" aria-label="Recent jobs pagination">
+    <a class="btn btn-outline-secondary{% if pagination.page <= 1 %} disabled{% endif %}" href="/history?tab=jobs&page={{ pagination.page - 1 }}"{% if pagination.page <= 1 %} aria-disabled="true" tabindex="-1"{% endif %}><i class="fa-solid fa-chevron-left me-1"></i>Previous</a>
+    <span class="btn btn-outline-secondary disabled">Page {{ pagination.page }} of {{ pagination.totalPages }}</span>
+    <a class="btn btn-outline-secondary{% if pagination.page >= pagination.totalPages %} disabled{% endif %}" href="/history?tab=jobs&page={{ pagination.page + 1 }}"{% if pagination.page >= pagination.totalPages %} aria-disabled="true" tabindex="-1"{% endif %}>Next<i class="fa-solid fa-chevron-right ms-1"></i></a>
+  </div>
+</div>
+{% else %}
+<div class="text-secondary small mb-3">Completed Soulseekarr downloads with download and Sonarr import status. Refreshes every 5 seconds.</div>
+<div class="compact-table-shell history-table-shell">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle mb-0 compact-data-table history-table" id="historyTable">
+      <thead><tr><th class="history-col-status" aria-label="Status"></th><th class="history-col-series">Series</th><th class="history-col-episode">Episode</th><th class="history-col-title">Episode title</th><th class="history-col-file">File</th><th class="history-col-peer">Peer</th><th class="history-col-downloaded">Downloaded</th><th class="history-col-updated">Updated</th><th class="history-col-info" aria-label="Details"></th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-2" id="historyPagination">
+  <div class="text-secondary small" id="historyPageInfo"></div>
+  <div class="btn-group btn-group-sm" role="group" aria-label="Downloads history pagination">
+    <button class="btn btn-outline-secondary" type="button" id="historyPrev"><i class="fa-solid fa-chevron-left me-1"></i>Previous</button>
+    <span class="btn btn-outline-secondary disabled" id="historyPageLabel"></span>
+    <button class="btn btn-outline-secondary" type="button" id="historyNext">Next<i class="fa-solid fa-chevron-right ms-1"></i></button>
+  </div>
+</div>
+{% endif %}
+
+<div class="modal fade" id="jobDetailsModal" tabindex="-1" aria-labelledby="jobDetailsModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title" id="jobDetailsModalTitle">File details</h5>
+          <div class="text-secondary small" id="jobDetailsModalSubtitle"></div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="jobDetailsBody">
+        <div class="text-center py-5"><div class="spinner-border" role="status"></div></div>
+      </div>
+      <div class="modal-footer">
+        <div class="me-auto small text-secondary" id="jobDetailsActionMessage"></div>
+        <button type="button" class="btn btn-outline-warning d-none" id="allowDownloadAgainBtn">
+          <i class="fa-solid fa-rotate-left me-1"></i>Allow download again
+        </button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+const jobDetailsModal = new bootstrap.Modal(document.getElementById('jobDetailsModal'));
+const jobDetailsBody = document.getElementById('jobDetailsBody');
+const jobDetailsTitle = document.getElementById('jobDetailsModalTitle');
+const jobDetailsSubtitle = document.getElementById('jobDetailsModalSubtitle');
+const jobDetailsActionMessage = document.getElementById('jobDetailsActionMessage');
+const allowDownloadAgainBtn = document.getElementById('allowDownloadAgainBtn');
+let currentJobDetailsId = null;
+function detailEscape(v) { const d=document.createElement('div'); d.textContent=String(v ?? ''); return d.innerHTML; }
+function detailValue(v, fallback='—') { return (v === null || v === undefined || v === '') ? fallback : String(v); }
+function formatBytes(bytes) {
+  const n = Number(bytes || 0);
+  if (!Number.isFinite(n) || n <= 0) return n === 0 ? '0 B' : '—';
+  const units = ['B','KB','MB','GB','TB'];
+  let value = n, unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value >= 100 || unit === 0 ? value.toFixed(0) : value.toFixed(2)} ${units[unit]} (${n.toLocaleString()} bytes)`;
+}
+function detailRow(label, value, {mono=false, wide=false}={}) {
+  const rendered = detailEscape(detailValue(value));
+  return `<div class="job-detail-row${wide ? ' job-detail-row-wide' : ''}">
+    <div class="job-detail-label">${detailEscape(label)}</div>
+    <div class="job-detail-value${mono ? ' font-monospace job-detail-path' : ''}">${rendered}</div>
+  </div>`;
+}
+function detailSection(title, rows) {
+  return `<section class="job-detail-section"><h6>${detailEscape(title)}</h6><div class="job-detail-grid">${rows.join('')}</div></section>`;
+}
+function renderJobDetails(j, repeatProtected=false) {
+  const status = detailValue(j.status, 'unknown');
+  if (String(j.job_kind || 'download') === 'search') {
+    const sourceLabel = String(j.cycle_source || 'automatic') === 'manual' ? 'Manual Cycle' : 'Automatic Cycle';
+    const targetLabel = j.search_target_type === 'upgrade'
+      ? 'Upgrade'
+      : (j.search_target_type === 'missing'
+        ? 'Missing'
+        : (j.search_target_type === 'queued' ? 'Queued retry' : 'Cycle'));
+    jobDetailsTitle.textContent = `${sourceLabel}${j.episode_code ? ` · ${j.episode_code}` : ''}`;
+    jobDetailsSubtitle.textContent = detailValue(j.episode_title, 'Search-cycle audit');
+    currentJobDetailsId = j.id || null;
+    jobDetailsActionMessage.textContent = 'Search-cycle audit entry. No download-history protection is attached to this row.';
+    allowDownloadAgainBtn.classList.add('d-none');
+    allowDownloadAgainBtn.disabled = false;
+    const messageBlock = j.message ? `<div class="alert alert-secondary job-detail-reason"><div class="fw-semibold mb-1">Outcome</div><div class="job-detail-path">${detailEscape(j.message)}</div></div>` : '';
+    jobDetailsBody.innerHTML = `${messageBlock}
+      ${detailSection('Search cycle', [
+        detailRow('Cycle source', sourceLabel), detailRow('Target type', targetLabel),
+        detailRow('Episode ID', j.episode_id || '—'), detailRow('Episode', j.episode_code || '—'),
+        detailRow('Query', j.search_query || '—', {mono:true, wide:true}),
+        detailRow('Raw results', j.search_result_count), detailRow('Usable candidates', j.search_usable_count),
+        detailRow('Downloads queued', j.search_queued_count), detailRow('Status', status)
+      ])}
+      ${detailSection('Timestamps', [detailRow('Created', j.created_at), detailRow('Updated', j.updated_at)])}`;
+    return;
+  }
+  const reasonStatuses = new Set(['failed', 'rejected', 'cancelled']);
+  const reason = reasonStatuses.has(String(status).toLowerCase()) ? detailValue(j.message) : '';
+  const reasonText = String(j.message || '').toLowerCase();
+  let failureSource = 'Soulseekarr';
+  if (reasonText.includes('slskd') || reasonText.includes('soulseek')) failureSource = 'slskd / Soulseek';
+  else if (reasonText.includes('sonarr')) failureSource = 'Sonarr';
+  jobDetailsTitle.textContent = `${detailValue(j.series_title, 'Unknown series')} · ${detailValue(j.episode_code, '')}`;
+  jobDetailsSubtitle.textContent = detailValue(j.episode_title, '');
+  currentJobDetailsId = j.id || null;
+  jobDetailsActionMessage.textContent = repeatProtected
+    ? 'This file is currently blocked by downloaded-file repeat protection.'
+    : 'This file is not currently blocked by downloaded-file repeat protection.';
+  allowDownloadAgainBtn.classList.toggle('d-none', !repeatProtected);
+  allowDownloadAgainBtn.disabled = false;
+  const reasonBlock = reason ? `<div class="alert alert-danger job-detail-reason"><div class="d-flex flex-wrap align-items-center gap-2 mb-1"><div class="fw-semibold">${detailEscape(status)} reason</div><span class="badge text-bg-secondary">Source: ${detailEscape(failureSource)}</span></div><div class="job-detail-path">${detailEscape(reason)}</div></div>` : '';
+  const messageBlock = !reason && j.message ? `<div class="alert alert-secondary job-detail-reason"><div class="fw-semibold mb-1">Status message</div><div class="job-detail-path">${detailEscape(j.message)}</div></div>` : '';
+  jobDetailsBody.innerHTML = `${reasonBlock}${messageBlock}
+    ${detailSection('Episode & transfer', [
+      detailRow('Status', status), detailRow('Peer', j.username),
+      detailRow('File size', formatBytes(j.size)), detailRow('Episode ID', j.episode_id),
+      detailRow('Job ID', j.id), detailRow('slskd transfer ID', j.transfer_id)
+    ])}
+    ${detailSection('Paths', [
+      detailRow('Remote Soulseek path', j.remote_filename, {mono:true, wide:true}),
+      detailRow('slskd completed file', j.slskd_file, {mono:true, wide:true}),
+      detailRow('Soulseekarr source file', j.source_file, {mono:true, wide:true}),
+      detailRow('Soulseekarr import/staging file', j.import_file, {mono:true, wide:true}),
+      detailRow('Sonarr file', j.sonarr_file, {mono:true, wide:true}),
+      detailRow('Prepared target name', j.prepare_target_name, {mono:true, wide:true})
+    ])}
+    ${detailSection('Preparation & queue', [
+      detailRow('Preparation step', j.prepare_step),
+      detailRow('Candidate Custom Format score', j.candidate_custom_format_score),
+      detailRow('Candidate resolution', j.candidate_resolution ? `${j.candidate_resolution}p` : '—'),
+      detailRow('Queue strikes', j.queue_strikes),
+      detailRow('Last known queue position', j.queue_last_position ? `#${j.queue_last_position}` : '—'),
+      detailRow('Last queue check', j.queue_last_checked_at)
+    ])}
+    ${detailSection('Timestamps', [
+      detailRow('Created', j.created_at), detailRow('Updated', j.updated_at), detailRow('Download completed', j.downloaded_at)
+    ])}`;
+}
+async function openJobDetails(jobId) {
+  jobDetailsTitle.textContent = 'File details';
+  jobDetailsSubtitle.textContent = '';
+  jobDetailsBody.innerHTML = '<div class="text-center py-5"><div class="spinner-border" role="status"></div></div>';
+  currentJobDetailsId = null;
+  jobDetailsActionMessage.textContent = '';
+  allowDownloadAgainBtn.classList.add('d-none');
+  allowDownloadAgainBtn.disabled = false;
+  jobDetailsModal.show();
+  try {
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {cache:'no-store'});
+    const data = await apiData(response);
+    renderJobDetails(data.job || {}, Boolean(data.repeatProtected));
+  } catch (error) {
+    jobDetailsModal.hide();
+    showSoulseekarrNotification(error.message || String(error), 'danger');
+  }
+}
+allowDownloadAgainBtn.addEventListener('click', async () => {
+  if (!currentJobDetailsId) return;
+  const confirmed = window.confirm(
+    'Allow this file to be downloaded again?\n\n' +
+    'Only downloaded-file repeat protection will be removed. The History/job entry and its failure reason will remain. ' +
+    'The episode search cooldown will also be reset.'
+  );
+  if (!confirmed) return;
+
+  allowDownloadAgainBtn.disabled = true;
+  jobDetailsActionMessage.textContent = '';
+  try {
+    const response = await fetch(`/api/jobs/${encodeURIComponent(currentJobDetailsId)}/download-history`, {
+      method: 'DELETE', cache: 'no-store'
+    });
+    const data = await apiData(response);
+    allowDownloadAgainBtn.classList.add('d-none');
+    showSoulseekarrNotification(data.message || 'This file can now be downloaded again.', 'success');
+  } catch (error) {
+    showSoulseekarrNotification(error.message || String(error), 'danger');
+    allowDownloadAgainBtn.disabled = false;
+  }
+});
+
+document.addEventListener('click', event => {
+  const button = event.target.closest('.job-details-btn');
+  if (!button) return;
+  const jobId = button.dataset.jobId;
+  if (jobId) openJobDetails(jobId);
+});
+</script>
+{% if active_tab == 'jobs' %}
+<script nonce="{{ request.state.csp_nonce }}">
+const jobsPage = {{ pagination.page }};
+function escapeHtml(v) { const d=document.createElement('div'); d.textContent=String(v ?? ''); return d.innerHTML; }
+function jobStatusIcon(status) {
+  const icons = {
+    queued: 'fa-clock', downloading: 'fa-cloud-arrow-down', copying: 'fa-file-arrow-down',
+    ready: 'fa-file-circle-check', evaluating: 'fa-scale-balanced', importing: 'fa-right-to-bracket',
+    imported: 'fa-circle-check', searched: 'fa-magnifying-glass', skipped: 'fa-forward-step',
+    failed: 'fa-triangle-exclamation', rejected: 'fa-triangle-exclamation', cancelled: 'fa-ban'
+  };
+  return icons[status] || 'fa-circle-info';
+}
+function jobFileSummary(j) {
+  if (String(j.job_kind || 'download') !== 'search') return escapeHtml(j.remote_filename);
+  const query = String(j.search_query || '');
+  const target = String(j.search_target_type || 'cycle');
+  if (!query) return escapeHtml(j.message || 'No Soulseek search was run.');
+  const label = target === 'upgrade'
+    ? 'Upgrade'
+    : (target === 'missing' ? 'Missing' : (target === 'queued' ? 'Queued retry' : 'Search'));
+  return `<span class="badge text-bg-secondary me-1">${escapeHtml(label)}</span>searched for &quot;${escapeHtml(query)}&quot;${j.message ? ` · ${escapeHtml(j.message)}` : ''}`;
+}
+async function refreshJobs() {
+  try {
+    const r = await fetch(`/api/jobs?page=${jobsPage}`, {cache:'no-store'});
+    const data = await apiData(r);
+    if (data.pagination && Number(data.pagination.page) !== Number(jobsPage)) {
+      window.location.replace(`/history?tab=jobs&page=${Number(data.pagination.page)}`);
+      return;
+    }
+    const tbody = document.querySelector('#jobsTable tbody');
+    tbody.innerHTML = data.jobs.length ? data.jobs.map(j => {
+      const status = String(j.status || 'unknown');
+      const statusTitle = [status, j.message].filter(Boolean).join(' · ');
+      return `<tr>
+        <td class="job-status-cell" title="${escapeHtml(statusTitle)}"><i class="fa-solid ${jobStatusIcon(status)} status-icon status-icon-${escapeHtml(status)}"></i></td>
+        <td class="job-series text-truncate fw-semibold" title="${escapeHtml(j.series_title)}">${escapeHtml(j.series_title)}</td>
+        <td class="job-episode text-nowrap">${escapeHtml(j.episode_code)}</td>
+        <td class="job-file text-truncate" title="${escapeHtml(j.message || j.remote_filename || '')}">${jobFileSummary(j)}</td>
+        <td class="job-updated text-secondary text-nowrap">${escapeHtml(j.updated_at)}</td>
+        <td class="job-info-cell"><button type="button" class="btn btn-link job-details-btn" data-job-id="${escapeHtml(j.id)}" aria-label="Show full details" title="Full details"><i class="fa-solid fa-circle-info download-info-icon"></i></button></td>
+      </tr>`;
+    }).join('') : '<tr><td colspan="6" class="text-center text-secondary py-4">No Soulseekarr jobs yet.</td></tr>';
+  } catch (_) {}
+}
+setInterval(refreshJobs, 5000);
+</script>
+{% else %}
+<script nonce="{{ request.state.csp_nonce }}">
+const initialHistory = {{ history | tojson }};
+const initialPagination = {{ pagination | tojson }};
+const historyBody = document.querySelector('#historyTable tbody');
+const historyPageInfo = document.getElementById('historyPageInfo');
+const historyPageLabel = document.getElementById('historyPageLabel');
+const historyPrev = document.getElementById('historyPrev');
+const historyNext = document.getElementById('historyNext');
+let currentPage = Number(initialPagination.page || 1);
+function escapeHtml(v) { const d=document.createElement('div'); d.textContent=String(v ?? ''); return d.innerHTML; }
+function basename(path) { return String(path || '').replaceAll('\\','/').split('/').pop() || ''; }
+function historyStatusIcon(status) {
+  const icons = {
+    imported: 'fa-circle-check',
+    failed: 'fa-triangle-exclamation',
+    rejected: 'fa-triangle-exclamation',
+    cancelled: 'fa-ban',
+    skipped: 'fa-forward-step'
+  };
+  return icons[status] || 'fa-circle-info';
+}
+function renderHistory(items) {
+  if (!items.length) {
+    historyBody.innerHTML = '<tr><td colspan="9" class="text-center text-secondary py-4"><i class="fa-solid fa-clock-rotate-left me-2"></i>No completed Soulseekarr jobs yet.</td></tr>';
+    return;
+  }
+  historyBody.innerHTML = items.map(j => {
+    const status = String(j.status || 'unknown');
+    const statusTitle = [status, j.message].filter(Boolean).join(' · ');
+    const downloadedAt = j.downloaded_at ? escapeHtml(j.downloaded_at) : '—';
+    const downloadedTitle = j.downloaded_at ? `Downloaded ${escapeHtml(j.downloaded_at)}` : 'No completed download timestamp';
+    return `<tr>
+      <td class="history-status-cell" title="${escapeHtml(statusTitle)}"><i class="fa-solid ${historyStatusIcon(status)} status-icon status-icon-${escapeHtml(status)}"></i></td>
+      <td class="history-series text-truncate fw-semibold" title="${escapeHtml(j.series_title)}">${escapeHtml(j.series_title)}</td>
+      <td class="history-episode text-nowrap">${escapeHtml(j.episode_code)}</td>
+      <td class="history-title text-truncate" title="${escapeHtml(j.episode_title)}">${escapeHtml(j.episode_title)}</td>
+      <td class="history-file text-truncate" title="${escapeHtml(j.remote_filename)}">${escapeHtml(basename(j.remote_filename))}</td>
+      <td class="history-peer text-truncate" title="${escapeHtml(j.username)}">${escapeHtml(j.username)}</td>
+      <td class="history-downloaded text-secondary text-nowrap" title="${downloadedTitle}">${downloadedAt}</td>
+      <td class="history-updated text-secondary text-nowrap">${escapeHtml(j.updated_at)}</td>
+      <td class="history-info-cell"><button type="button" class="btn btn-link job-details-btn" data-job-id="${escapeHtml(j.id)}" aria-label="Show full details" title="Full details"><i class="fa-solid fa-circle-info download-info-icon"></i></button></td>
+    </tr>`;
+  }).join('');
+}
+function renderHistoryPagination(pagination) {
+  currentPage = Number(pagination.page || 1);
+  const total = Number(pagination.total || 0);
+  historyPageInfo.textContent = `Showing ${Number(pagination.start || 0)}–${Number(pagination.end || 0)} of ${total} download${total === 1 ? '' : 's'}`;
+  historyPageLabel.textContent = `Page ${currentPage} of ${Number(pagination.totalPages || 1)}`;
+  historyPrev.disabled = currentPage <= 1;
+  historyNext.disabled = currentPage >= Number(pagination.totalPages || 1);
+  const url = new URL(window.location.href);
+  url.searchParams.set('tab', 'downloads');
+  if (currentPage > 1) url.searchParams.set('page', String(currentPage));
+  else url.searchParams.delete('page');
+  window.history.replaceState({}, '', url);
+}
+async function refreshHistory() {
+  try {
+    const response = await fetch(`/api/history?page=${currentPage}`, {cache:'no-store'});
+    const data = await apiData(response);
+    renderHistory(data.history || []);
+    renderHistoryPagination(data.pagination || initialPagination);
+  } catch (_) {}
+}
+const clearDownloadedHistoryBtn = document.getElementById('clearDownloadedHistoryBtn');
+clearDownloadedHistoryBtn.addEventListener('click', async () => {
+  const confirmed = window.confirm(
+    'Clear Soulseekarr downloaded-file history?\n\n' +
+    'This resets duplicate-download protection, so previously downloaded files may be downloaded again. ' +
+    'Completed job/import history will remain.'
+  );
+  if (!confirmed) return;
+  clearDownloadedHistoryBtn.disabled = true;
+  try {
+    const response = await fetch('/api/history/downloaded', {method: 'DELETE'});
+    const data = await apiData(response);
+    showSoulseekarrNotification(data.message || 'Downloaded-file history cleared.', 'success');
+    await refreshHistory();
+  } catch (error) {
+    showSoulseekarrNotification(error.message || String(error), 'danger');
+  } finally {
+    clearDownloadedHistoryBtn.disabled = false;
+  }
+});
+historyPrev.addEventListener('click', async () => {
+  if (currentPage <= 1) return;
+  currentPage -= 1;
+  await refreshHistory();
+});
+historyNext.addEventListener('click', async () => {
+  currentPage += 1;
+  await refreshHistory();
+});
+renderHistory(initialHistory);
+renderHistoryPagination(initialPagination);
+setInterval(refreshHistory, 5000);
+</script>
+{% endif %}
+{% endblock %}

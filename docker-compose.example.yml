@@ -1,0 +1,29 @@
+services:
+  soulseekarr:
+    build: .
+    container_name: soulseekarr
+    restart: unless-stopped
+    # Harden the container without changing bind-mount ownership requirements.
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=64m
+    environment:
+      TZ: Europe/Riga
+      SOULSEEKARR_CONFIG_DIR: /config
+      SOULSEEKARR_IMPORT_DIR: /downloads
+    volumes:
+      - ./config:/config
+
+      # Completed slskd downloads. RW lets Soulseekarr normalize the completed
+      # filename and delete the source after Sonarr import processing. With :ro,
+      # import can still use staging, but source cleanup needs slskd
+      # remote_file_management enabled for the Files API fallback.
+      - /path/on/host/slskd-downloads:/slskd-downloads:rw
+
+      # Fallback staging folder, used only if no folder mapping matches.
+      # Mount this same host path into Sonarr too (the Sonarr path may differ).
+      - /path/on/host/soulseekarr-import:/downloads
+    ports:
+      - "8787:8080"

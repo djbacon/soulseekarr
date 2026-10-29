@@ -1,0 +1,367 @@
+{% extends "base.html" %}
+{% block title %}Active downloads · Soulseekarr{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h3 mb-1">Active downloads</h1>
+    <div class="text-secondary small">Soulseekarr jobs from slskd queueing through Sonarr import. Live slskd state is collected continuously in the background; this page reads only the last saved local snapshot.</div>
+  </div>
+  <a class="btn btn-outline-secondary btn-sm" href="/downloads?page={{ pagination.page }}"><i class="fa-solid fa-rotate me-1"></i>Refresh</a>
+</div>
+
+<div class="downloads-table-shell">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle mb-0 downloads-table" id="downloadsTable">
+      <thead>
+        <tr>
+          <th class="download-col-status" aria-label="Status"></th>
+          <th class="download-col-series">Series</th>
+          <th class="download-col-episode">Episode</th>
+          <th class="download-col-quality">Quality</th>
+          <th class="download-col-size text-end">Size</th>
+          <th class="download-col-peer">Peer</th>
+          <th class="download-col-speed">Speed</th>
+          <th class="download-col-time">Time left</th>
+          <th class="download-col-progress">Progress</th>
+          <th class="download-col-info" aria-label="Details"></th>
+          <th class="download-col-remove" aria-label="Remove"></th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-2" id="downloadsPagination">
+  <div class="text-secondary small" id="downloadsPageInfo"></div>
+  <div class="btn-group btn-group-sm" role="group" aria-label="Downloads pagination">
+    <button class="btn btn-outline-secondary" type="button" id="downloadsPrev"><i class="fa-solid fa-chevron-left me-1"></i>Previous</button>
+    <span class="btn btn-outline-secondary disabled" id="downloadsPageLabel"></span>
+    <button class="btn btn-outline-secondary" type="button" id="downloadsNext">Next<i class="fa-solid fa-chevron-right ms-1"></i></button>
+  </div>
+</div>
+
+<div class="modal fade" id="downloadDetailsModal" tabindex="-1" aria-labelledby="downloadDetailsModalTitle" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <div>
+          <h5 class="modal-title" id="downloadDetailsModalTitle">Download details</h5>
+          <div class="text-secondary small" id="downloadDetailsModalSubtitle"></div>
+        </div>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="downloadDetailsBody">
+        <div class="text-center py-5"><div class="spinner-border" role="status"></div></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+const initialDownloads = {{ downloads | tojson }};
+const initialPagination = {{ pagination | tojson }};
+const tbody = document.querySelector('#downloadsTable tbody');
+let lastSlskdWarning = {{ slskd_error | tojson }} || '';
+let lastDownloadsRefreshError = '';
+if (lastSlskdWarning) showSoulseekarrNotification(`Background slskd refresh error: ${lastSlskdWarning}`, 'warning');
+const pageInfo = document.getElementById('downloadsPageInfo');
+const pageLabel = document.getElementById('downloadsPageLabel');
+const prevBtn = document.getElementById('downloadsPrev');
+const nextBtn = document.getElementById('downloadsNext');
+const downloadDetailsModal = new bootstrap.Modal(document.getElementById('downloadDetailsModal'));
+const downloadDetailsBody = document.getElementById('downloadDetailsBody');
+const downloadDetailsTitle = document.getElementById('downloadDetailsModalTitle');
+const downloadDetailsSubtitle = document.getElementById('downloadDetailsModalSubtitle');
+let currentPage = Number(initialPagination.page || 1);
+let currentDownloads = new Map();
+let refreshInFlight = false;
+
+function escapeHtml(v) { const d=document.createElement('div'); d.textContent=String(v ?? ''); return d.innerHTML; }
+function formatBytes(n) {
+  n = Number(n || 0);
+  if (!n) return '0 B';
+  const u=['B','KB','MB','GB','TB'];
+  const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),u.length-1);
+  return `${(n/Math.pow(1024,i)).toFixed(i>1?2:0)} ${u[i]}`;
+}
+function formatBytesExact(n) {
+  const bytes = Number(n || 0);
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  return `${formatBytes(bytes)} (${bytes.toLocaleString()} bytes)`;
+}
+function detailEscape(v) { const d=document.createElement('div'); d.textContent=String(v ?? ''); return d.innerHTML; }
+function detailValue(v, fallback='—') { return (v === null || v === undefined || v === '') ? fallback : String(v); }
+function detailRow(label, value, {mono=false, wide=false}={}) {
+  const rendered = detailEscape(detailValue(value));
+  return `<div class="job-detail-row${wide ? ' job-detail-row-wide' : ''}">
+    <div class="job-detail-label">${detailEscape(label)}</div>
+    <div class="job-detail-value${mono ? ' font-monospace job-detail-path' : ''}">${rendered}</div>
+  </div>`;
+}
+function detailSection(title, rows) {
+  return `<section class="job-detail-section"><h6>${detailEscape(title)}</h6><div class="job-detail-grid">${rows.join('')}</div></section>`;
+}
+function renderDownloadDetails(j) {
+  const size = Number(j.size || 0);
+  const transferred = Number(j.bytesTransferred || 0);
+  const queuePosition = Number(j.placeInQueue || 0) > 0 ? `#${Number(j.placeInQueue)}` : '—';
+  const preparationProgress = j.preparationProgress === null || j.preparationProgress === undefined
+    ? '—' : `${Number(j.preparationProgress).toFixed(0)}%`;
+  downloadDetailsTitle.textContent = `${detailValue(j.series_title, 'Unknown series')} · ${detailValue(j.episode_code, '')}`;
+  downloadDetailsSubtitle.textContent = detailValue(j.episode_title, '');
+  const messageBlock = j.message
+    ? `<div class="alert alert-secondary job-detail-reason"><div class="fw-semibold mb-1">Current status message</div><div class="job-detail-path">${detailEscape(j.message)}</div></div>`
+    : '';
+  downloadDetailsBody.innerHTML = `${messageBlock}
+    ${detailSection('Current transfer', [
+      detailRow('Status', j.status), detailRow('slskd state', j.transferState),
+      detailRow('File size', formatBytesExact(size)), detailRow('Transferred', formatBytesExact(transferred)),
+      detailRow('Progress', `${Number(j.progressPercent || 0).toFixed(1)}%`), detailRow('Speed', Number(j.speedMbits || 0) > 0 ? `${Number(j.speedMbits).toFixed(2)} Mbit/s` : '—'),
+      detailRow('Bytes remaining', formatBytesExact(j.bytesRemaining)), detailRow('Time remaining', timeLeft(j)),
+      detailRow('slskd transfer found', j.transferFound ? 'Yes' : 'No'), detailRow('slskd attempts', j.attempts),
+      detailRow('slskd exception', j.transferException, {wide:true})
+    ])}
+    ${detailSection('Episode & candidate', [
+      detailRow('Series', j.series_title), detailRow('Episode', j.episode_code),
+      detailRow('Episode title', j.episode_title), detailRow('Episode ID', j.episode_id),
+      detailRow('Peer', j.username), detailRow('Quality', j.quality || 'Unknown'),
+      detailRow('Candidate Custom Format score', j.candidate_custom_format_score),
+      detailRow('Candidate resolution', j.candidate_resolution ? `${j.candidate_resolution}p` : '—'),
+      detailRow('Job ID', j.id), detailRow('Stored slskd transfer ID', j.transfer_id),
+      detailRow('Live slskd transfer ID', j.liveTransferId)
+    ])}
+    ${detailSection('Queue & preparation', [
+      detailRow('Queued', j.isQueued ? 'Yes' : 'No'), detailRow('Queue position', queuePosition),
+      detailRow('Queue strikes', `${Number(j.queue_strikes || 0)}/${Number(j.queueStrikeLimit || 168)}`),
+      detailRow('Last recorded queue position', j.queue_last_position ? `#${j.queue_last_position}` : '—'),
+      detailRow('Last queue check', j.queue_last_checked_at), detailRow('Peer-limit wait', j.waitingForPeerLimit ? 'Yes' : 'No'),
+      detailRow('Preparation step', j.preparationStep || j.prepare_step), detailRow('Preparation progress', preparationProgress)
+    ])}
+    ${detailSection('Paths', [
+      detailRow('Remote Soulseek path', j.remote_filename, {mono:true, wide:true}),
+      detailRow('Planned/final filename', j.prepare_target_name, {mono:true, wide:true}),
+      detailRow('slskd completed file', j.slskd_file, {mono:true, wide:true}),
+      detailRow('Soulseekarr source file', j.source_file, {mono:true, wide:true}),
+      detailRow('Soulseekarr import/staging file', j.import_file, {mono:true, wide:true}),
+      detailRow('Sonarr file', j.sonarr_file, {mono:true, wide:true})
+    ])}
+    ${detailSection('Timestamps', [
+      detailRow('Soulseekarr created', j.created_at), detailRow('Soulseekarr updated', j.updated_at),
+      detailRow('slskd requested', j.requestedAt), detailRow('slskd enqueued', j.enqueuedAt),
+      detailRow('slskd started', j.startedAt), detailRow('slskd ended', j.endedAt),
+      detailRow('Download completed', j.downloaded_at)
+    ])}`;
+}
+async function openDownloadDetails(jobId) {
+  const live = currentDownloads.get(Number(jobId)) || {};
+  downloadDetailsTitle.textContent = 'Download details';
+  downloadDetailsSubtitle.textContent = '';
+  downloadDetailsBody.innerHTML = '<div class="text-center py-5"><div class="spinner-border" role="status"></div></div>';
+  downloadDetailsModal.show();
+  try {
+    const response = await fetch(`/api/jobs/${encodeURIComponent(jobId)}`, {cache:'no-store'});
+    const data = await apiData(response);
+    renderDownloadDetails({...data.job, ...live});
+  } catch (error) {
+    if (Object.keys(live).length) renderDownloadDetails(live);
+    else { downloadDetailsModal.hide(); showSoulseekarrNotification(error.message || String(error), 'danger'); }
+  }
+}
+function formatDuration(seconds) {
+  if (seconds === null || seconds === undefined || !Number.isFinite(Number(seconds))) return '';
+  let s=Math.max(0, Math.round(Number(seconds)));
+  const h=Math.floor(s/3600); s%=3600;
+  const m=Math.floor(s/60); s%=60;
+  if (h) return `${h}h ${m}m`;
+  if (m) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+function basename(path) { return String(path || '').replaceAll('\\','/').split('/').pop() || ''; }
+function statusIcon(status) {
+  const icons = {
+    queued: 'fa-clock',
+    downloading: 'fa-cloud-arrow-down',
+    copying: 'fa-file-arrow-down',
+    ready: 'fa-file-circle-check',
+    evaluating: 'fa-scale-balanced',
+    importing: 'fa-right-to-bracket'
+  };
+  return icons[status] || 'fa-circle-info';
+}
+function statusTitle(j) {
+  const bits = [String(j.status || 'unknown')];
+  if (j.transferState) bits.push(String(j.transferState));
+  if (j.message) bits.push(String(j.message));
+  return bits.join(' · ');
+}
+function timeLeft(j) {
+  if (j.status === 'copying') return 'Preparing';
+  if (j.status === 'evaluating') return 'Scoring';
+  if (j.status === 'importing') return 'Importing';
+  if (j.remainingSeconds !== null && j.remainingSeconds !== undefined) return formatDuration(j.remainingSeconds) || '—';
+  return '—';
+}
+function progressTitle(j) {
+  if (j.livePending) return 'Waiting for the first background slskd snapshot…';
+  if (j.status === 'copying') return `Download complete; ${j.preparationStep || 'preparing file'}`;
+  if (j.status === 'evaluating') return 'Download complete; evaluating candidates';
+  if (j.status === 'importing') return 'Download complete; waiting for Sonarr import';
+  if (!j.transferFound) return j.status === 'queued' ? 'Waiting for slskd' : 'Waiting for transfer data';
+  if (j.isQueued) {
+    const strikes = Math.max(0, Number(j.queue_strikes || 0));
+    const limit = Math.max(1, Number(j.queueStrikeLimit || 168));
+    const place = Number(j.placeInQueue) > 0 ? `Queue #${Number(j.placeInQueue)}` : 'Queue place unknown';
+    return `${place} · ${strikes}/${limit} hourly strikes; any move toward #1 resets strikes`;
+  }
+  return `${formatBytes(j.bytesTransferred)} / ${formatBytes(j.size)}`;
+}
+function render(downloads) {
+  currentDownloads = new Map(downloads.map(j => [Number(j.id), j]));
+  if (!downloads.length) {
+    tbody.innerHTML = '<tr><td colspan="11" class="text-center text-secondary py-4"><i class="fa-solid fa-circle-check me-2"></i>No active Soulseekarr downloads.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = downloads.map(j => {
+    const pct = Math.max(0, Math.min(100, Number(j.progressPercent || 0)));
+    const speed = Number(j.speedMbits || 0) > 0 ? `${Number(j.speedMbits).toFixed(2)} Mbit/s` : '—';
+    const file = basename(j.remote_filename);
+    const details = [file, j.message].filter(Boolean).join(' · ');
+    const quality = String(j.quality || '').trim();
+    const showQuality = quality && quality.toLowerCase() !== 'unknown';
+    const isPreparing = j.status === 'copying';
+    const preparationStep = String(j.preparationStep || 'Preparing file');
+    const preparationPct = j.preparationProgress === null || j.preparationProgress === undefined
+      ? null
+      : Math.max(0, Math.min(100, Number(j.preparationProgress)));
+    return `<tr title="${escapeHtml(file)}">
+      <td class="download-status-cell" title="${escapeHtml(statusTitle(j))}"><i class="fa-solid ${statusIcon(j.status)} status-icon status-icon-${escapeHtml(j.status)}"></i></td>
+      <td class="download-series text-truncate" title="${escapeHtml(j.series_title)}">${escapeHtml(j.series_title)}</td>
+      <td class="download-episode text-nowrap">${escapeHtml(j.episode_code)}</td>
+      <td class="download-quality text-nowrap" title="${showQuality ? escapeHtml(quality) : ''}">${showQuality ? `<span class="download-quality-badge">${escapeHtml(quality)}</span>` : ''}</td>
+      <td class="download-size text-nowrap text-end" title="${escapeHtml(formatBytesExact(j.size))}">${escapeHtml(formatBytes(j.size))}</td>
+      <td class="download-peer text-truncate" title="${escapeHtml(j.username)}">${escapeHtml(j.username)}</td>
+      <td class="download-speed text-nowrap">${speed}</td>
+      <td class="download-time text-nowrap" title="${escapeHtml(progressTitle(j))}">${escapeHtml(timeLeft(j))}</td>
+      <td class="download-progress-cell" title="${escapeHtml(progressTitle(j))}">
+        ${j.livePending ? `
+          <span class="download-progress-state text-secondary"><i class="fa-regular fa-clock me-1"></i>Waiting for snapshot…</span>
+        ` : isPreparing ? (preparationPct !== null ? `
+          <div class="d-flex align-items-center gap-2">
+            <div class="progress download-progress flex-grow-1" role="progressbar" aria-valuenow="${preparationPct}" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar" style="width:${preparationPct}%"></div></div>
+            <span class="download-percent text-secondary">${preparationPct.toFixed(0)}%</span>
+          </div>
+        ` : `
+          <span class="download-progress-state download-preparation-step text-secondary"><i class="fa-solid fa-gears me-1"></i>${escapeHtml(preparationStep)}</span>
+        `) : j.waitingForPeerLimit ? `
+          <span class="download-progress-state text-secondary"><i class="fa-regular fa-clock me-1"></i>Peer limit wait</span>
+        ` : j.isQueued ? `
+          <span class="download-progress-state text-secondary"><i class="fa-regular fa-clock me-1"></i>Queued${Number(j.placeInQueue) > 0 ? ` #${Number(j.placeInQueue)}` : ''}${Number(j.queue_strikes || 0) > 0 ? ` · ${Number(j.queue_strikes)}/${Number(j.queueStrikeLimit || 168)}` : ''}</span>
+        ` : `
+          <div class="d-flex align-items-center gap-2">
+            <div class="progress download-progress flex-grow-1" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar" style="width:${pct}%"></div></div>
+            <span class="download-percent text-secondary">${pct.toFixed(0)}%</span>
+          </div>
+        `}
+      </td>
+      <td class="download-info-cell"><button type="button" class="btn btn-link job-details-btn" data-info-job="${Number(j.id)}" aria-label="Show full download details" title="Full details"><i class="fa-solid fa-circle-info download-info-icon"></i></button></td>
+      <td class="download-remove-cell">
+        <button type="button" class="btn btn-sm btn-link download-remove-btn" data-remove-job="${Number(j.id)}"
+          title="${j.status === 'importing' ? 'Sonarr import is already in progress' : 'Remove download'}"
+          aria-label="Remove download" ${j.status === 'importing' ? 'disabled' : ''}>
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </td>
+    </tr>`;
+  }).join('');
+}
+
+function renderPagination(pagination) {
+  currentPage = Number(pagination.page || 1);
+  const total = Number(pagination.total || 0);
+  pageInfo.textContent = `Showing ${Number(pagination.start || 0)}–${Number(pagination.end || 0)} of ${total} active download${total === 1 ? '' : 's'}`;
+  pageLabel.textContent = `Page ${currentPage} of ${Number(pagination.totalPages || 1)}`;
+  prevBtn.disabled = currentPage <= 1;
+  nextBtn.disabled = currentPage >= Number(pagination.totalPages || 1);
+  const url = new URL(window.location.href);
+  if (currentPage > 1) url.searchParams.set('page', String(currentPage));
+  else url.searchParams.delete('page');
+  window.history.replaceState({}, '', url);
+}
+
+async function refreshDownloads() {
+  // This endpoint reads SQLite only. The independent background worker owns
+  // slskd polling, so browser refreshes never create upstream traffic.
+  if (refreshInFlight) return;
+  refreshInFlight = true;
+  try {
+    const response = await fetch(`/api/downloads?page=${currentPage}`, {cache:'no-store'});
+    const data = await apiData(response);
+    render(data.downloads || []);
+    renderPagination(data.pagination || initialPagination);
+    const slskdError = String(data.slskdError || '');
+    if (slskdError && slskdError !== lastSlskdWarning) {
+      showSoulseekarrNotification(`Background slskd refresh error: ${slskdError}`, 'warning');
+    }
+    lastSlskdWarning = slskdError;
+    lastDownloadsRefreshError = '';
+  } catch (err) {
+    const message = err.message || 'Could not refresh active downloads.';
+    if (message !== lastDownloadsRefreshError) showSoulseekarrNotification(message, 'danger');
+    lastDownloadsRefreshError = message;
+  } finally {
+    refreshInFlight = false;
+  }
+}
+
+prevBtn.addEventListener('click', async () => {
+  if (currentPage <= 1) return;
+  currentPage -= 1;
+  await refreshDownloads();
+});
+nextBtn.addEventListener('click', async () => {
+  currentPage += 1;
+  await refreshDownloads();
+});
+
+tbody.addEventListener('click', async (event) => {
+  const infoButton = event.target.closest('[data-info-job]');
+  if (infoButton) {
+    const jobId = Number(infoButton.dataset.infoJob || 0);
+    if (jobId) await openDownloadDetails(jobId);
+    return;
+  }
+
+  const button = event.target.closest('[data-remove-job]');
+  if (!button || button.disabled) return;
+  const jobId = Number(button.dataset.removeJob || 0);
+  if (!jobId) return;
+  if (!window.confirm('Remove this download from Soulseekarr and slskd, and delete its temporary files?')) return;
+
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/downloads/${jobId}`, {method:'DELETE'});
+    const data = await apiData(response);
+    await refreshDownloads();
+    if (Array.isArray(data.errors) && data.errors.length) {
+      showSoulseekarrNotification(data.message || 'Download was removed, but some temporary-file cleanup failed.', 'warning');
+    } else {
+      showSoulseekarrNotification(data.message || 'Download removed.', 'success');
+    }
+  } catch (err) {
+    showSoulseekarrNotification(err.message || 'Could not remove download.', 'danger');
+    button.disabled = false;
+  }
+});
+
+render(initialDownloads);
+renderPagination(initialPagination);
+// Initial HTML already contains the latest saved snapshot. Poll only the local
+// API after the page has been open for a while; this never contacts slskd.
+setInterval(() => { void refreshDownloads(); }, 3000);
+</script>
+{% endblock %}

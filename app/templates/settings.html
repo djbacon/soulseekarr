@@ -1,0 +1,455 @@
+{% extends "base.html" %}
+{% block title %}Settings · Soulseekarr{% endblock %}
+{% macro setting_help(text, label) -%}
+<button class="settings-help-btn" type="button" data-settings-help data-bs-toggle="popover" data-bs-trigger="focus" data-bs-placement="top" data-bs-custom-class="settings-help-popover" data-bs-content="{{ text }}" aria-label="Help for {{ label }}"><i class="fa-regular fa-circle-question" aria-hidden="true"></i></button>
+{%- endmacro %}
+{% block content %}
+<div class="settings-page">
+  <div class="d-flex flex-wrap align-items-start justify-content-between gap-2 mb-3">
+    <div>
+      <h1 class="h3 mb-1">Settings</h1>
+      <div class="text-secondary small">Connections, paths, search behavior, automation, and import handling.</div>
+    </div>
+  </div>
+
+  <form method="post" id="settingsForm">
+    <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+    <div class="settings-layout">
+      <aside class="settings-nav-wrap">
+        <div class="settings-nav card shadow-sm">
+          <div class="card-body p-2">
+            <div class="nav nav-pills flex-column settings-nav-pills" id="settingsNav" role="tablist" aria-orientation="vertical">
+              <button class="nav-link active" id="settings-connections-tab" data-bs-toggle="pill" data-bs-target="#settings-connections" type="button" role="tab" aria-controls="settings-connections" aria-selected="true">
+                <span class="settings-nav-icon"><i class="fa-solid fa-plug"></i></span><span><strong>Connections</strong><small>Sonarr, Radarr &amp; slskd</small></span>
+              </button>
+              <button class="nav-link" id="settings-storage-tab" data-bs-toggle="pill" data-bs-target="#settings-storage" type="button" role="tab" aria-controls="settings-storage" aria-selected="false">
+                <span class="settings-nav-icon"><i class="fa-solid fa-folder-tree"></i></span><span><strong>Storage</strong><small>Paths &amp; mappings</small></span>
+              </button>
+              <button class="nav-link" id="settings-search-tab" data-bs-toggle="pill" data-bs-target="#settings-search" type="button" role="tab" aria-controls="settings-search" aria-selected="false">
+                <span class="settings-nav-icon"><i class="fa-solid fa-magnifying-glass"></i></span><span><strong>Search</strong><small>Timing &amp; matching</small></span>
+              </button>
+              <button class="nav-link" id="settings-automation-tab" data-bs-toggle="pill" data-bs-target="#settings-automation" type="button" role="tab" aria-controls="settings-automation" aria-selected="false">
+                <span class="settings-nav-icon"><i class="fa-solid fa-bolt"></i></span><span><strong>Automation</strong><small>Automatic behavior</small></span>
+              </button>
+              <button class="nav-link" id="settings-import-tab" data-bs-toggle="pill" data-bs-target="#settings-import" type="button" role="tab" aria-controls="settings-import" aria-selected="false">
+                <span class="settings-nav-icon"><i class="fa-solid fa-file-import"></i></span><span><strong>Downloads &amp; Import</strong><small>Timeouts &amp; imports</small></span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <div class="tab-content settings-content" id="settingsTabContent">
+        <section class="tab-pane fade show active" id="settings-connections" role="tabpanel" aria-labelledby="settings-connections-tab" tabindex="0">
+          <div class="settings-panel card shadow-sm">
+            <div class="settings-panel-header">
+              <div>
+                <h2><i class="fa-solid fa-plug me-2"></i>Connections</h2>
+                <p>API endpoints Soulseekarr uses to communicate with Sonarr, Radarr and slskd.</p>
+              </div>
+            </div>
+            <div class="settings-panel-body">
+              <div class="connection-card">
+                <div class="connection-card-head">
+                  <div><span class="service-icon"><i class="fa-solid fa-tv"></i></span><strong>Sonarr</strong></div>
+                  <span class="badge rounded-pill {% if settings.sonarr_url and settings.sonarr_api_key %}text-bg-success{% else %}text-bg-secondary{% endif %}">{% if settings.sonarr_url and settings.sonarr_api_key %}Configured{% else %}Not configured{% endif %}</span>
+                </div>
+                <div class="row g-2 align-items-end">
+                  <div class="col-lg-8">
+                    <label class="form-label">URL</label>
+                    <input class="form-control" name="sonarr_url" type="url" maxlength="2048" value="{{ settings.sonarr_url }}" placeholder="http://sonarr:8989">
+                  </div>
+                  <div class="col-lg-4">
+                    <label class="form-label">API key</label>
+                    <input class="form-control" name="sonarr_api_key" maxlength="512" value="{{ '********' if settings.sonarr_api_key else '' }}" autocomplete="off">
+                  </div>
+                </div>
+                <div class="d-flex justify-content-end mt-2"><button class="btn btn-outline-secondary btn-sm test-connection" type="button" data-connection-kind="sonarr"><i class="fa-solid fa-vial me-1"></i>Test connection</button></div>
+              </div>
+
+              <div class="connection-card mt-3">
+                <div class="connection-card-head">
+                  <div><span class="service-icon"><i class="fa-solid fa-film"></i></span><strong>Radarr</strong></div>
+                  <span class="badge rounded-pill {% if settings.radarr_url and settings.radarr_api_key %}text-bg-success{% else %}text-bg-secondary{% endif %}">{% if settings.radarr_url and settings.radarr_api_key %}Configured{% else %}Not configured{% endif %}</span>
+                </div>
+                <div class="row g-2 align-items-end">
+                  <div class="col-lg-8">
+                    <label class="form-label">URL</label>
+                    <input class="form-control" name="radarr_url" type="url" maxlength="2048" value="{{ settings.radarr_url }}" placeholder="http://radarr:7878">
+                  </div>
+                  <div class="col-lg-4">
+                    <label class="form-label">API key</label>
+                    <input class="form-control" name="radarr_api_key" maxlength="512" value="{{ '********' if settings.radarr_api_key else '' }}" autocomplete="off">
+                  </div>
+                </div>
+                <div class="d-flex justify-content-end mt-2"><button class="btn btn-outline-secondary btn-sm test-connection" type="button" data-connection-kind="radarr"><i class="fa-solid fa-vial me-1"></i>Test connection</button></div>
+              </div>
+
+              <div class="connection-card mt-3">
+                <div class="connection-card-head">
+                  <div><span class="service-icon"><i class="fa-solid fa-share-nodes"></i></span><strong>slskd</strong></div>
+                  <span class="badge rounded-pill {% if settings.slskd_url and settings.slskd_api_key %}text-bg-success{% else %}text-bg-secondary{% endif %}">{% if settings.slskd_url and settings.slskd_api_key %}Configured{% else %}Not configured{% endif %}</span>
+                </div>
+                <div class="row g-2 align-items-end">
+                  <div class="col-lg-8">
+                    <label class="form-label">URL</label>
+                    <input class="form-control" name="slskd_url" type="url" maxlength="2048" value="{{ settings.slskd_url }}" placeholder="http://slskd:5030">
+                  </div>
+                  <div class="col-lg-4">
+                    <label class="form-label">API key</label>
+                    <input class="form-control" name="slskd_api_key" maxlength="512" value="{{ '********' if settings.slskd_api_key else '' }}" autocomplete="off">
+                  </div>
+                </div>
+                <div class="d-flex justify-content-end mt-2"><button class="btn btn-outline-secondary btn-sm test-connection" type="button" data-connection-kind="slskd"><i class="fa-solid fa-vial me-1"></i>Test connection</button></div>
+              </div>
+              <div id="testResult" class="mt-3"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-pane fade" id="settings-storage" role="tabpanel" aria-labelledby="settings-storage-tab" tabindex="0">
+          <div class="settings-panel card shadow-sm">
+            <div class="settings-panel-header">
+              <div>
+                <h2><i class="fa-solid fa-folder-tree me-2"></i>Storage {{ setting_help("Folder mappings translate completed-download paths between slskd, Soulseekarr, Sonarr, and Radarr. When mappings overlap, the longest matching slskd path wins.", "Storage mappings") }}</h2>
+                <p>Map the same download directory across slskd, Soulseekarr, Sonarr, and Radarr.</p>
+              </div>
+              <button class="btn btn-outline-primary btn-sm" type="button" id="addMapping"><i class="fa-solid fa-plus me-1"></i>Add mapping</button>
+            </div>
+            <div class="settings-panel-body">
+              <div class="mapping-table-wrap">
+                <div class="row g-2 settings-mapping-head d-none d-md-flex">
+                  <div class="col-md-4">slskd path</div>
+                  <div class="col-md-4">Soulseekarr path</div>
+                  <div class="col-md-4 pe-5">Sonarr / Radarr paths</div>
+                </div>
+                <div id="mappingRows">
+                  {% for mapping in settings.folder_mappings %}
+                  <div class="mapping-row row g-2 align-items-start">
+                    <div class="col-md-4"><label class="form-label d-md-none">slskd path</label><input class="form-control font-monospace" name="mapping_slskd_path" value="{{ mapping.slskd_path }}" placeholder="/app/downloads"></div>
+                    <div class="col-md-4"><label class="form-label d-md-none">Soulseekarr path</label><input class="form-control font-monospace" name="mapping_soulseekarr_path" value="{{ mapping.soulseekarr_path }}" placeholder="/slskd-downloads"></div>
+                    <div class="col-md-4"><label class="form-label d-md-none">Sonarr / Radarr paths</label><div class="d-flex gap-2"><div class="d-grid gap-1 flex-grow-1"><input class="form-control font-monospace" name="mapping_sonarr_path" value="{{ mapping.sonarr_path }}" placeholder="Sonarr path"><input class="form-control font-monospace" name="mapping_radarr_path" value="{{ mapping.radarr_path or '' }}" placeholder="Radarr path (optional)"></div><button class="btn btn-outline-danger compact-icon-btn remove-mapping" type="button" title="Remove mapping" aria-label="Remove mapping"><i class="fa-solid fa-trash"></i></button></div></div>
+                  </div>
+                  {% endfor %}
+                </div>
+                <div id="noMappings" class="settings-empty-state {% if settings.folder_mappings %}d-none{% endif %}"><i class="fa-regular fa-folder-open me-1"></i>No mappings configured. Fallback staging will be used.</div>
+              </div>
+              <div class="settings-subsection mt-4">
+                <div class="settings-subsection-title"><h3>Fallback staging</h3>{{ setting_help("Used only when no folder mapping matches the completed download.", "Fallback staging") }}</div>
+                <div class="row g-2">
+                  <div class="col-lg-6">
+                    <div class="settings-label-row"><label class="form-label">Import path as Sonarr sees it</label>{{ setting_help("Soulseekarr's staging folder path inside Sonarr.", "Import path as Sonarr sees it") }}</div>
+                    <input class="form-control font-monospace" name="sonarr_import_path" value="{{ settings.sonarr_import_path }}">
+                    <label class="form-label mt-2">Import path as Radarr sees it</label>
+                    <input class="form-control font-monospace" name="radarr_import_path" value="{{ settings.radarr_import_path }}">
+                    {% set import_space = storage_space.sonarr_import %}
+                    <div class="form-text settings-path-space">
+                      <i class="fa-solid fa-hard-drive me-1"></i>
+                      {% if import_space.available %}
+                        <span title="Measured from Soulseekarr's local staging mount: {{ import_space.path }}"><strong>{{ import_space.totalText }}</strong> total · <strong>{{ import_space.freeText }}</strong> free</span>
+                      {% else %}
+                        <span class="text-warning" title="{{ import_space.error }}">Space unavailable for local staging mount {{ import_space.path }}.</span>
+                      {% endif %}
+                    </div>
+                  </div>
+                  <div class="col-lg-6">
+                    <div class="settings-label-row"><label class="form-label">slskd downloads path in Soulseekarr</label>{{ setting_help("Fallback mount searched recursively for completed files.", "slskd downloads path in Soulseekarr") }}</div>
+                    <input class="form-control font-monospace" name="slskd_downloads_path" value="{{ settings.slskd_downloads_path }}">
+                    {% set slskd_space = storage_space.slskd_downloads %}
+                    <div class="form-text settings-path-space">
+                      <i class="fa-solid fa-hard-drive me-1"></i>
+                      {% if slskd_space.available %}
+                        <span title="Measured from Soulseekarr path: {{ slskd_space.path }}"><strong>{{ slskd_space.totalText }}</strong> total · <strong>{{ slskd_space.freeText }}</strong> free</span>
+                      {% else %}
+                        <span class="text-warning" title="{{ slskd_space.error }}">Space unavailable for {{ slskd_space.path }}.</span>
+                      {% endif %}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-pane fade" id="settings-search" role="tabpanel" aria-labelledby="settings-search-tab" tabindex="0">
+          <div class="settings-panel card shadow-sm">
+            <div class="settings-panel-header">
+              <div>
+                <h2><i class="fa-solid fa-magnifying-glass me-2"></i>Search</h2>
+                <p>Control how often Soulseekarr searches and which files are eligible.</p>
+              </div>
+            </div>
+            <div class="settings-panel-body">
+              <div class="settings-subsection first">
+                <h3>Schedule &amp; pacing</h3>
+                <div class="row g-2">
+                  <div class="col-sm-6 col-xl-3"><div class="settings-label-row"><label class="form-label">Target search interval</label>{{ setting_help("Minimum wait after one automatic search finishes before Soulseekarr starts the next episode or movie. One bundle can contain an alternate query for the same episode. Recommended: 2 minutes or more.", "Target search interval") }}</div><div class="input-group"><input class="form-control" type="number" min="1" name="scan_interval_minutes" value="{{ settings.scan_interval_minutes }}"><span class="input-group-text">min</span></div></div>
+                  <div class="col-sm-6 col-xl-3"><label class="form-label">Search timeout</label><div class="input-group"><input class="form-control" type="number" min="5" max="60" name="search_timeout_seconds" value="{{ settings.search_timeout_seconds }}"><span class="input-group-text">sec</span></div></div>
+                  <div class="col-sm-6 col-xl-3"><div class="settings-label-row"><label class="form-label">Additional-query gap</label>{{ setting_help("Wait between alternate Soulseek query forms for the same episode. The fallback query is used only when the previous form found no usable candidate. Recommended: 15–30 seconds.", "Additional-query gap") }}</div><div class="input-group"><input class="form-control" type="number" min="1" max="300" name="auto_search_gap_seconds" value="{{ settings.auto_search_gap_seconds }}"><span class="input-group-text">sec</span></div></div>
+                  <div class="col-sm-6 col-xl-3"><div class="settings-label-row"><label class="form-label">Base repeat-search cooldown</label>{{ setting_help("Base delay used by adaptive automatic-search backoff. Missing episodes can retry sooner after an empty search, repeated misses back off longer, and exploratory upgrades are checked less often. Set 0 to disable adaptive/repeat cooldowns without disabling automatic search; episodes then become eligible again as soon as the scheduler rotates back to them.", "Base repeat-search cooldown") }}</div><div class="input-group"><input class="form-control" type="number" min="0" max="720" name="repeat_search_cooldown_hours" value="{{ settings.repeat_search_cooldown_hours }}"><span class="input-group-text">hours</span></div></div>
+                  <div class="col-sm-6 col-xl-3"><div class="settings-label-row"><label class="form-label">Missing release delay</label>{{ setting_help("Wait this long after the Sonarr air date or Radarr digital/physical release before a missing title can be searched or downloaded. Applies to automatic and manual missing-episode searches and season-folder expansion; existing-file upgrades are not delayed. Season 00 specials with no Sonarr airDateUtc are allowed immediately. Set 0 for no extra delay after air time.", "Missing release delay") }}</div><div class="input-group"><input class="form-control" type="number" min="0" max="720" name="missing_episode_delay_hours" value="{{ settings.missing_episode_delay_hours }}"><span class="input-group-text">hours</span></div></div>
+                  <div class="col-sm-6 col-xl-3"><label class="form-label">Search order</label><select class="form-select" name="search_order"><option value="sequential" {% if settings.search_order != 'random' %}selected{% endif %}>Sequential</option><option value="random" {% if settings.search_order == 'random' %}selected{% endif %}>Random</option></select></div>
+                </div>
+                <div class="settings-note mt-3" id="nextAutoSearchStatus" data-next-run-at="{{ auto_search_schedule.nextRunAt or '' }}" data-state="{{ auto_search_schedule.state }}">
+                  <i class="fa-solid fa-calendar-clock"></i>
+                  <span><strong>Next automatic search:</strong> <span id="nextAutoSearchValue">{{ auto_search_schedule.message }}</span></span>
+                </div>
+              </div>
+
+              <div class="settings-subsection">
+                <h3>Candidate limits</h3>
+                <div class="row g-2">
+                  <div class="col-sm-6 col-xl-4"><label class="form-label">Minimum file size</label><div class="input-group"><input class="form-control" type="number" min="1" name="min_file_size_mb" value="{{ settings.min_file_size_mb }}"><span class="input-group-text">MB</span></div></div>
+                  <div class="col-sm-6 col-xl-4"><label class="form-label">Maximum file size</label><div class="input-group"><input class="form-control" type="number" min="1" name="max_file_size_mb" value="{{ settings.max_file_size_mb }}"><span class="input-group-text">MB</span></div></div>
+                  <div class="col-sm-6 col-xl-4"><label class="form-label">Maximum search responses</label><input class="form-control" type="number" min="10" max="1000" name="max_search_results" value="{{ settings.max_search_results }}"></div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-pane fade" id="settings-automation" role="tabpanel" aria-labelledby="settings-automation-tab" tabindex="0">
+          <div class="settings-panel card shadow-sm">
+            <div class="settings-panel-header">
+              <div>
+                <h2><i class="fa-solid fa-bolt me-2"></i>Automation</h2>
+                <p>Choose what Soulseekarr may do without a manual episode action.</p>
+              </div>
+            </div>
+            <div class="settings-panel-body">
+              <div class="settings-switch-list">
+                <div class="settings-switch-row">
+                  <span class="settings-switch-copy"><span class="settings-switch-title"><label for="autosearch">Automatic search</label>{{ setting_help("Run scheduled automatic Soulseek search cycles. Manual episode searches remain available when disabled. Series and movie choices are controlled from Library, while Sonarr season- and episode-level monitoring remains authoritative.", "Automatic search") }}</span></span>
+                  <span class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" name="auto_search_enabled" id="autosearch" {% if settings.auto_search_enabled %}checked{% endif %}></span>
+                </div>
+                <div class="settings-switch-row">
+                  <span class="settings-switch-copy"><span class="settings-switch-title"><label for="autodl">Automatic downloads</label>{{ setting_help("Automatically queue the best eligible Soulseek candidate found by automatic searches.", "Automatic downloads") }}</span></span>
+                  <span class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" name="auto_download" id="autodl" {% if settings.auto_download %}checked{% endif %}></span>
+                </div>
+                <div class="settings-switch-row">
+                  <span class="settings-switch-copy"><span class="settings-switch-title"><label for="newseriesdownload">Download newly added series and movies by default</label>{{ setting_help("Applied once when a series or movie is first discovered. Existing Library choices are never rewritten.", "Download newly added series and movies by default") }}</span></span>
+                  <span class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" name="new_series_download_enabled" id="newseriesdownload" {% if settings.new_series_download_enabled %}checked{% endif %}></span>
+                </div>
+              </div>
+
+              <div class="settings-subsection mt-4">
+                <h3>Cycle limits</h3>
+                <div class="row g-2 align-items-start">
+                  <div class="col-sm-6 col-lg-4"><label class="form-label">Automatic downloads per cycle</label><input class="form-control" type="number" min="1" max="20" name="max_auto_per_cycle" value="{{ settings.max_auto_per_cycle }}"></div>
+                  <div class="col-sm-6 col-lg-4"><div class="settings-label-row"><label class="form-label">Active-download search limit</label>{{ setting_help("Static mode: pause new automatic Soulseek searches once the total active queue grows above this many jobs. Default 100. Queued-retry searches use the same selected limit mode; Manual episode searches/downloads are unaffected.", "Active-download search limit") }}</div><input class="form-control" type="number" min="1" max="10000" name="max_active_downloads_for_search" value="{{ settings.max_active_downloads_for_search }}"></div>
+                  <div class="col-lg-4"></div>
+                </div>
+                <div class="row g-2 align-items-start mt-1">
+                  <div class="col-sm-6 col-lg-4">
+                    <div class="settings-switch-row h-100">
+                      <span class="settings-switch-copy"><span class="settings-switch-title"><label for="dynamicActiveDownloadLimit">Dynamic active-download limit</label>{{ setting_help("Use the number of transfers actually downloading instead of the total queued or active job count.", "Dynamic active-download limit") }}</span></span>
+                      <span class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" name="dynamic_active_download_limit_enabled" id="dynamicActiveDownloadLimit" {% if settings.dynamic_active_download_limit_enabled %}checked{% endif %}></span>
+                    </div>
+                  </div>
+                  <div class="col-sm-6 col-lg-4"><div class="settings-label-row"><label class="form-label">Maximum actually downloading</label>{{ setting_help("Dynamic mode pauses only when the number of real network transfers is above this value. Equality is allowed: with 5, searches continue while 0–5 files are downloading, even if the total active queue is above the static limit. Queued, peer-limit waiting, preparing, and importing files do not count as actually downloading.", "Maximum actually downloading") }}</div><input class="form-control" type="number" min="0" max="1000" name="max_actual_downloading_for_search" value="{{ settings.max_actual_downloading_for_search }}"></div>
+                  <div class="col-lg-4"></div>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </section>
+
+        <section class="tab-pane fade" id="settings-import" role="tabpanel" aria-labelledby="settings-import-tab" tabindex="0">
+          <div class="settings-panel card shadow-sm">
+            <div class="settings-panel-header">
+              <div>
+                <h2><i class="fa-solid fa-file-import me-2"></i>Downloads &amp; Import</h2>
+                <p>Timeouts and handoff behavior after a Soulseek transfer starts.</p>
+              </div>
+            </div>
+            <div class="settings-panel-body">
+              <div class="row g-2">
+                <div class="col-md-6"><div class="settings-label-row"><label class="form-label">Download timeout</label>{{ setting_help("Maximum time allowed after a Soulseek transfer actually starts. Time spent waiting in the remote queue does not count.", "Download timeout") }}</div><div class="input-group"><input class="form-control" type="number" min="10" name="download_timeout_minutes" value="{{ settings.download_timeout_minutes }}"><span class="input-group-text">min</span></div></div>
+                <div class="col-md-6"><div class="settings-label-row"><label class="form-label">Import timeout (Sonarr / Radarr)</label>{{ setting_help("How long a prepared file may wait for Sonarr or Radarr ManualImport and final library-file confirmation. Minimum 60 minutes; default 120 minutes; maximum 24 hours. Soulseekarr waits for the media service to confirm the imported file before cleaning up source and staging files.", "Import timeout (Sonarr / Radarr)") }}</div><div class="input-group"><input class="form-control" type="number" min="60" max="1440" step="15" name="sonarr_import_timeout_minutes" value="{{ settings.sonarr_import_timeout_minutes }}"><span class="input-group-text">min</span></div></div>
+              </div>
+
+              <div class="settings-subsection mt-4">
+                <h3>Peer failure protection</h3>
+                <div class="row g-2">
+                  <div class="col-md-6"><div class="settings-label-row"><label class="form-label">Enqueue failure strikes</label>{{ setting_help("When slskd returns HTTP 500 while trying to enqueue a file from one Soulseek user, that user receives a strike. A successful enqueue clears accumulated strikes. When this threshold is reached, the peer is put on cooldown and queued-but-not-yet-accepted files from that peer are stopped instead of retried indefinitely.", "Enqueue failure strikes") }}</div><div class="input-group"><input class="form-control" type="number" min="1" max="100" name="peer_failure_strike_limit" value="{{ settings.peer_failure_strike_limit }}"><span class="input-group-text">strikes</span></div></div>
+                  <div class="col-md-6"><div class="settings-label-row"><label class="form-label">Peer failure cooldown</label>{{ setting_help("How many days Soulseekarr skips a peer after it reaches the enqueue-failure strike threshold. This applies to repeated slskd HTTP 500 enqueue failures and does not cancel transfers that slskd already accepted.", "Peer failure cooldown") }}</div><div class="input-group"><input class="form-control" type="number" min="1" max="365" name="peer_failure_cooldown_days" value="{{ settings.peer_failure_cooldown_days }}"><span class="input-group-text">days</span></div></div>
+                </div>
+              </div>
+
+              <div class="settings-subsection mt-4">
+                <h3>Database history</h3>
+                <div class="row g-2">
+                  <div class="col-md-6"><div class="settings-label-row"><label class="form-label">History retention</label>{{ setting_help("Finished download/import jobs, search-cycle audit jobs, and their old repeat-protection records are deleted after this age. Default 48 hours. Active downloads are never pruned.", "History retention") }}</div><div class="input-group"><input class="form-control" type="number" min="1" max="8760" name="history_retention_hours" value="{{ settings.history_retention_hours }}"><span class="input-group-text">hours</span></div></div>
+                </div>
+              </div>
+
+              <div class="settings-switch-list mt-3">
+                <div class="settings-switch-row">
+                  <span class="settings-switch-copy"><span class="settings-switch-title"><label for="preferhardlinks">Prefer hardlinks for staging</label>{{ setting_help("When the completed Soulseek file and fallback staging folder are on the same filesystem, create a hardlink instead of copying the file. If hardlinking is unsupported or crosses filesystems, Soulseekarr automatically falls back to a resumable copy. Hardlinks use no extra file data; symlinks are not used.", "Prefer hardlinks for staging") }}</span></span>
+                  <span class="form-check form-switch m-0"><input class="form-check-input" type="checkbox" name="prefer_hardlinks" id="preferhardlinks" {% if settings.prefer_hardlinks %}checked{% endif %}></span>
+                </div>
+              </div>
+
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="settings-savebar shadow-lg">
+      <div class="settings-savebar-copy"><strong>Settings</strong><span class="text-secondary">Changes are applied after saving.</span></div>
+      <button class="btn btn-primary btn-sm px-3" type="submit"><i class="fa-solid fa-floppy-disk me-1"></i>Save changes</button>
+    </div>
+  </form>
+</div>
+{% endblock %}
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+const mappingRows = document.getElementById('mappingRows');
+const noMappings = document.getElementById('noMappings');
+const SETTINGS_TAB_KEY = 'soulseekarr.settingsTab';
+{% if saved %}showSoulseekarrNotification('Settings saved.', 'success');{% endif %}
+
+function mappingRow() {
+  const wrapper = document.createElement('div');
+  wrapper.className = 'mapping-row row g-2 align-items-start';
+  wrapper.innerHTML = `
+    <div class="col-md-4"><label class="form-label d-md-none">slskd path</label><input class="form-control font-monospace" name="mapping_slskd_path" placeholder="/app/downloads"></div>
+    <div class="col-md-4"><label class="form-label d-md-none">Soulseekarr path</label><input class="form-control font-monospace" name="mapping_soulseekarr_path" placeholder="/slskd-downloads"></div>
+    <div class="col-md-4"><label class="form-label d-md-none">Sonarr / Radarr paths</label><div class="d-flex gap-2"><div class="d-grid gap-1 flex-grow-1"><input class="form-control font-monospace" name="mapping_sonarr_path" placeholder="Sonarr path"><input class="form-control font-monospace" name="mapping_radarr_path" placeholder="Radarr path (optional)"></div><button class="btn btn-outline-danger compact-icon-btn remove-mapping" type="button" title="Remove mapping" aria-label="Remove mapping"><i class="fa-solid fa-trash"></i></button></div></div>`;
+  return wrapper;
+}
+
+function refreshMappingEmptyState() {
+  noMappings.classList.toggle('d-none', mappingRows.querySelector('.mapping-row') !== null);
+}
+
+document.getElementById('addMapping').addEventListener('click', () => {
+  const row = mappingRow();
+  mappingRows.appendChild(row);
+  row.querySelector('input').focus();
+  refreshMappingEmptyState();
+});
+
+mappingRows.addEventListener('click', event => {
+  const button = event.target.closest('.remove-mapping');
+  if (!button) return;
+  button.closest('.mapping-row').remove();
+  refreshMappingEmptyState();
+});
+
+for (const tab of document.querySelectorAll('#settingsNav [data-bs-toggle="pill"]')) {
+  tab.addEventListener('shown.bs.tab', event => {
+    try { localStorage.setItem(SETTINGS_TAB_KEY, event.target.id); } catch (_) {}
+  });
+}
+try {
+  const savedTab = localStorage.getItem(SETTINGS_TAB_KEY);
+  const tab = savedTab ? document.getElementById(savedTab) : null;
+  if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
+} catch (_) {}
+
+for (const trigger of document.querySelectorAll('[data-settings-help]')) {
+  bootstrap.Popover.getOrCreateInstance(trigger, {
+    container: 'body',
+    trigger: 'focus',
+    placement: 'top',
+    html: false,
+  });
+}
+
+for (const button of document.querySelectorAll('.test-connection')) {
+  button.addEventListener('click', () => testConnection(button.dataset.connectionKind || ''));
+}
+
+async function testConnection(kind) {
+  const el = document.getElementById('testResult');
+  el.innerHTML = '<div class="settings-test-result text-secondary"><i class="fa-solid fa-spinner fa-spin me-1"></i>Testing connection…</div>';
+  try {
+    const form = document.getElementById('settingsForm');
+    const r = await fetch(`/api/test/${kind}`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        url: form.elements.namedItem(`${kind}_url`).value,
+        api_key: form.elements.namedItem(`${kind}_api_key`).value,
+      }),
+    });
+    const data = await apiData(r);
+    const detail = (kind === 'sonarr' || kind === 'radarr') && data.version ? ` · v${data.version}` : '';
+    showSoulseekarrNotification(`${kind} connection OK${detail}.`, 'success');
+  } catch (err) {
+    showSoulseekarrNotification(err.message || 'Connection failed', 'danger');
+  } finally {
+    el.innerHTML = '';
+  }
+}
+let nextAutoSearchAt = null;
+
+function formatAutoSearchRemaining(ms) {
+  if (ms <= 0) return 'due now';
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days) return `in ${days}d ${hours}h ${minutes}m`;
+  if (hours) return `in ${hours}h ${minutes}m`;
+  if (minutes) return `in ${minutes}m ${seconds}s`;
+  return `in ${seconds}s`;
+}
+
+function renderAutoSearchSchedule(data) {
+  const value = document.getElementById('nextAutoSearchValue');
+  if (!value) return;
+  if (!data || data.state === 'running') {
+    nextAutoSearchAt = null;
+    value.textContent = data?.message || 'Automatic search cycle is running now.';
+    return;
+  }
+  if (!data.nextRunAt) {
+    nextAutoSearchAt = null;
+    value.textContent = data.message || 'No automatic search is scheduled.';
+    return;
+  }
+  const parsed = new Date(data.nextRunAt);
+  if (Number.isNaN(parsed.getTime())) {
+    nextAutoSearchAt = null;
+    value.textContent = data.message || 'Schedule unavailable.';
+    return;
+  }
+  nextAutoSearchAt = parsed;
+  const localTime = parsed.toLocaleString();
+  value.textContent = `${localTime} (${formatAutoSearchRemaining(parsed.getTime() - Date.now())})`;
+}
+
+async function refreshAutoSearchSchedule() {
+  try {
+    const response = await fetch('/api/auto-search-schedule', {cache: 'no-store'});
+    if (!response.ok) return;
+    renderAutoSearchSchedule(await response.json());
+  } catch (_) {}
+}
+
+function tickAutoSearchCountdown() {
+  if (!nextAutoSearchAt) return;
+  const value = document.getElementById('nextAutoSearchValue');
+  if (!value) return;
+  value.textContent = `${nextAutoSearchAt.toLocaleString()} (${formatAutoSearchRemaining(nextAutoSearchAt.getTime() - Date.now())})`;
+}
+
+renderAutoSearchSchedule({
+  state: {{ auto_search_schedule.state | tojson }},
+  nextRunAt: {{ auto_search_schedule.nextRunAt | tojson }},
+  message: {{ auto_search_schedule.message | tojson }}
+});
+setInterval(tickAutoSearchCountdown, 1000);
+setInterval(refreshAutoSearchSchedule, 10000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAutoSearchSchedule(); });
+window.addEventListener('focus', refreshAutoSearchSchedule);
+
+function escapeSettingsHtml(v) { const d=document.createElement('div'); d.textContent=String(v ?? ''); return d.innerHTML; }
+</script>
+{% endblock %}

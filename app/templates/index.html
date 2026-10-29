@@ -1,0 +1,360 @@
+{% extends "base.html" %}
+{% block title %}Missing · Soulseekarr{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h3 mb-1">Missing episodes</h1>
+    <div class="text-secondary small" id="missingDelaySummary">Episodes and movies enabled in <a href="/series">Library</a>. Missing titles become searchable {{ missing_episode_delay_hours }} hour{% if missing_episode_delay_hours != 1 %}s{% endif %} after the air date or digital/physical movie release date. Season 00 specials without an air date and movies without a release date whose known year is at least two calendar years ago are allowed immediately.</div>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-outline-primary btn-sm" id="autoCycle"><i class="fa-solid fa-wand-magic-sparkles me-1"></i>Run auto cycle</button>
+    <button class="btn btn-outline-secondary btn-sm" type="button" id="missingRefreshButton"><i class="fa-solid fa-rotate me-1"></i>Refresh</button>
+  </div>
+</div>
+
+
+<div class="compact-table-shell missing-table-shell mb-2">
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle mb-0 compact-data-table missing-table">
+      <thead><tr><th class="missing-col-series">Series</th><th class="missing-col-episode">Episode</th><th class="missing-col-title">Episode title</th><th class="missing-col-aired">Aired</th><th class="missing-col-cooldown text-center">Cooldown</th><th class="missing-col-downloading text-center">Downloading</th><th class="missing-col-action" aria-label="Action"></th></tr></thead>
+      <tbody id="missingTableBody">
+      {% for ep in episodes %}
+        <tr class="missing-row" data-series-id="{{ ep.series_id }}">
+          <td class="missing-series text-truncate fw-semibold" title="{{ ep.series_title }}">{{ ep.series_title }}</td>
+          <td class="missing-episode text-nowrap">{{ ep.episode_code }}</td>
+          <td class="missing-title text-truncate" title="{{ ep.title }}">{{ ep.title }}</td>
+          <td class="missing-aired text-secondary text-nowrap" title="{{ ep.air_date_utc or 'Unknown air date' }}">{{ ep.air_date_utc[:10] if ep.air_date_utc else '—' }}</td>
+          <td class="missing-cooldown text-center text-warning" data-cooldown-until="{{ ep.search_cooldown_until or '' }}" title="Automatic search cooldown remaining"></td>
+          <td class="missing-downloading text-center">
+            <span class="download-source-icons">
+              {% if ep.id in sonarr_queue_episode_ids %}<i class="fa-solid fa-cloud-arrow-down download-source-icon download-source-sonarr" title="Downloading in media service" aria-label="Downloading in media service"></i>{% endif %}
+              {% if ep.id in active_soulseekarr_episode_ids %}<i class="fa-solid fa-download download-source-icon download-source-local" title="Downloading in Soulseekarr" aria-label="Downloading in Soulseekarr"></i>{% endif %}
+            </span>
+          </td>
+          <td class="missing-action text-center">
+            {% if ep.id not in search_eligible_episode_ids %}
+              <i class="fa-regular fa-clock compact-state-icon"{% if search_available_at.get(ep.id) %} title="Waiting {{ missing_episode_delay_hours }}h · Search eligible after {{ search_available_at.get(ep.id) }}"{% else %} title="Waiting · No valid release date"{% endif %} aria-label="Waiting for search eligibility"></i>
+            {% else %}
+              <span class="missing-action-buttons">
+                <button class="btn btn-outline-secondary btn-sm compact-icon-btn manual-search-btn" data-episode-id="{{ ep.id }}" title="Manual search" aria-label="Manual search"><i class="fa-solid fa-user"></i></button>
+                <button class="btn btn-outline-primary btn-sm compact-icon-btn auto-search-btn" data-episode-id="{{ ep.id }}" title="Automatic search and download" aria-label="Automatic search and download"><i class="fa-solid fa-magnifying-glass"></i></button>
+              </span>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7" class="text-center text-secondary py-4">No missing titles in the enabled library.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-2 mb-4">
+  <div class="text-secondary small" id="missingPageSummary">Showing {{ pagination.start }}–{{ pagination.end }} of {{ pagination.total }} missing episode{% if pagination.total != 1 %}s{% endif %}</div>
+  <div class="btn-group btn-group-sm" role="group" aria-label="Missing episodes pagination">
+    <button class="btn btn-outline-secondary" type="button" id="missingPrevPage"{% if pagination.page <= 1 %} disabled{% endif %}><i class="fa-solid fa-chevron-left me-1"></i>Previous</button>
+    <span class="btn btn-outline-secondary disabled" id="missingPageLabel">Page {{ pagination.page }} of {{ pagination.totalPages }}</span>
+    <button class="btn btn-outline-secondary" type="button" id="missingNextPage"{% if pagination.page >= pagination.totalPages %} disabled{% endif %}>Next<i class="fa-solid fa-chevron-right ms-1"></i></button>
+  </div>
+</div>
+
+<div class="modal fade" id="resultsModal" tabindex="-1">
+  <div class="modal-dialog modal-xl modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Soulseek results</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body" id="resultsBody"><div class="text-center py-5"><div class="spinner-border"></div></div></div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+{% include "_cooldown_timer.html" %}
+<script nonce="{{ request.state.csp_nonce }}">
+const modal = new bootstrap.Modal(document.getElementById('resultsModal'));
+const body = document.getElementById('resultsBody');
+{% if not configured %}showSoulseekarrNotification('Configure Sonarr or Radarr, and slskd in Settings first.', 'warning');{% endif %}
+{% if error %}showSoulseekarrNotification({{ error | tojson }}, 'danger');{% endif %}
+
+function removeLegacyMissingPageQuery() {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('page')) return;
+    url.searchParams.delete('page');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch (_) {}
+}
+
+// Older Soulseekarr versions used /?page=N. Preserve old bookmarks while
+// keeping pagination state out of the visible URL and avoiding a reload.
+removeLegacyMissingPageQuery();
+
+const initialMissingPayload = {{ initial_missing_payload | tojson }};
+let currentMissingPage = Number(initialMissingPayload.pagination?.page || 1);
+const missingPageCache = new Map();
+const missingPageRequests = new Map();
+const pendingAutoSearchButtons = new Map();
+let pendingAutoCycleButton = null;
+
+function renderMissingRows(payload) {
+  const tableBody = document.getElementById('missingTableBody');
+  if (!tableBody) return;
+  const episodes = Array.isArray(payload.episodes) ? payload.episodes : [];
+  if (!episodes.length) {
+    tableBody.innerHTML = '<tr><td colspan="7" class="text-center text-secondary py-4">No missing titles in the enabled library.</td></tr>';
+    return;
+  }
+
+  const queued = new Set((payload.sonarrQueueEpisodeIds || []).map(Number));
+  const activeSoulseekarr = new Set((payload.activeSoulseekarrEpisodeIds || []).map(Number));
+  const eligible = new Set((payload.searchEligibleEpisodeIds || []).map(Number));
+  const availableAt = payload.searchAvailableAt || {};
+  const delayHours = Number(payload.missingEpisodeDelayHours || 0);
+
+  tableBody.innerHTML = episodes.map(ep => {
+    const episodeId = Number(ep.id);
+    let action = '';
+    if (!eligible.has(episodeId)) {
+      const available = availableAt[String(episodeId)] || availableAt[episodeId] || '';
+      const title = available ? `Waiting ${delayHours}h · Search eligible after ${available}` : 'Waiting · No valid release date';
+      action = `<i class="fa-regular fa-clock compact-state-icon" title="${escapeHtml(title)}" aria-label="Waiting for search eligibility"></i>`;
+    } else {
+      action = `<span class="missing-action-buttons"><button class="btn btn-outline-secondary btn-sm compact-icon-btn manual-search-btn" data-episode-id="${episodeId}" title="Manual search" aria-label="Manual search"><i class="fa-solid fa-user"></i></button><button class="btn btn-outline-primary btn-sm compact-icon-btn auto-search-btn" data-episode-id="${episodeId}" title="Automatic search and download" aria-label="Automatic search and download"><i class="fa-solid fa-magnifying-glass"></i></button></span>`;
+    }
+    const downloadSources = `<span class="download-source-icons">${queued.has(episodeId) ? '<i class="fa-solid fa-cloud-arrow-down download-source-icon download-source-sonarr" title="Downloading in media service" aria-label="Downloading in media service"></i>' : ''}${activeSoulseekarr.has(episodeId) ? '<i class="fa-solid fa-download download-source-icon download-source-local" title="Downloading in Soulseekarr" aria-label="Downloading in Soulseekarr"></i>' : ''}</span>`;
+    const airDate = ep.air_date_utc ? String(ep.air_date_utc) : '';
+    const aired = airDate ? airDate.slice(0, 10) : '—';
+    return `<tr class="missing-row" data-series-id="${Number(ep.series_id)}">
+      <td class="missing-series text-truncate fw-semibold" title="${escapeHtml(ep.series_title)}">${escapeHtml(ep.series_title)}</td>
+      <td class="missing-episode text-nowrap">${escapeHtml(ep.episode_code)}</td>
+      <td class="missing-title text-truncate" title="${escapeHtml(ep.title)}">${escapeHtml(ep.title)}</td>
+      <td class="missing-aired text-secondary text-nowrap" title="${escapeHtml(airDate || 'Unknown air date')}">${escapeHtml(aired)}</td>
+      <td class="missing-cooldown text-center text-warning" data-cooldown-until="${Number(ep.search_cooldown_until) || ''}" title="Automatic search cooldown remaining"></td>
+      <td class="missing-downloading text-center">${downloadSources}</td>
+      <td class="missing-action text-center">${action}</td>
+    </tr>`;
+  }).join('');
+}
+
+function renderMissingPayload(payload) {
+  if (!payload || !payload.pagination) return;
+  currentMissingPage = Number(payload.pagination.page || 1);
+  renderMissingRows(payload);
+  updateSearchCooldownTimers();
+
+  const total = Number(payload.pagination.total || 0);
+  const summary = document.getElementById('missingPageSummary');
+  if (summary) summary.textContent = `Showing ${Number(payload.pagination.start || 0)}–${Number(payload.pagination.end || 0)} of ${total} missing episode${total === 1 ? '' : 's'}`;
+  const label = document.getElementById('missingPageLabel');
+  if (label) label.textContent = `Page ${currentMissingPage} of ${Number(payload.pagination.totalPages || 1)}`;
+  const prev = document.getElementById('missingPrevPage');
+  const next = document.getElementById('missingNextPage');
+  if (prev) prev.disabled = currentMissingPage <= 1;
+  if (next) next.disabled = currentMissingPage >= Number(payload.pagination.totalPages || 1);
+  if (payload.error) showSoulseekarrNotification(payload.error, 'danger');
+  const delay = document.getElementById('missingDelaySummary');
+  if (delay) {
+    const hours = Number(payload.missingEpisodeDelayHours || 0);
+    delay.innerHTML = `Episodes and movies enabled in <a href="/series">Library</a>. Missing titles become searchable ${hours} hour${hours === 1 ? '' : 's'} after the air date or digital/physical movie release date. Season 00 specials without an air date and movies without a release date whose known year is at least two calendar years ago are allowed immediately.`;
+  }
+  prefetchAdjacentMissingPage(payload.pagination);
+}
+
+async function loadMissingPage(page, {force = false} = {}) {
+  const safePage = Math.max(1, Number(page || 1));
+  if (!force && missingPageCache.has(safePage)) return missingPageCache.get(safePage);
+  if (!force && missingPageRequests.has(safePage)) return missingPageRequests.get(safePage);
+
+  const request = fetch(`/api/missing/page/${safePage}`, {cache: 'no-store'})
+    .then(apiData)
+    .then(payload => {
+      missingPageCache.set(safePage, payload);
+      return payload;
+    })
+    .finally(() => missingPageRequests.delete(safePage));
+  missingPageRequests.set(safePage, request);
+  return request;
+}
+
+function prefetchAdjacentMissingPage(pagination) {
+  const page = Number(pagination.page || 1);
+  const totalPages = Number(pagination.totalPages || 1);
+  if (page < totalPages) void loadMissingPage(page + 1).catch(() => {});
+  if (page > 1) void loadMissingPage(page - 1).catch(() => {});
+}
+
+async function navigateMissingPage(page) {
+  const prev = document.getElementById('missingPrevPage');
+  const next = document.getElementById('missingNextPage');
+  if (prev) prev.disabled = true;
+  if (next) next.disabled = true;
+  try {
+    renderMissingPayload(await loadMissingPage(page));
+  } catch (err) {
+    showSoulseekarrNotification(err.message || 'Could not load missing episodes', 'danger');
+    const current = missingPageCache.get(currentMissingPage);
+    if (current) renderMissingPayload(current);
+  }
+}
+
+updateSearchCooldownTimers();
+setInterval(updateSearchCooldownTimers, 1000);
+missingPageCache.set(currentMissingPage, initialMissingPayload);
+prefetchAdjacentMissingPage(initialMissingPayload.pagination);
+
+document.getElementById('missingPrevPage')?.addEventListener('click', () => navigateMissingPage(currentMissingPage - 1));
+document.getElementById('missingNextPage')?.addEventListener('click', () => navigateMissingPage(currentMissingPage + 1));
+document.getElementById('missingRefreshButton')?.addEventListener('click', async event => {
+  const button = event.currentTarget;
+  if (button) button.disabled = true;
+  try {
+    missingPageCache.clear();
+    missingPageRequests.clear();
+    renderMissingPayload(await loadMissingPage(currentMissingPage, {force: true}));
+  } catch (err) {
+    showSoulseekarrNotification(err.message || 'Could not refresh missing episodes', 'danger');
+  } finally {
+    if (button) button.disabled = false;
+  }
+});
+
+async function runManualSearch(episodeId, variantNumber = null) {
+  body.innerHTML = '<div class="text-center py-5"><div class="spinner-border"></div><div class="mt-3 text-secondary">Searching Soulseek…</div></div>';
+  modal.show();
+  try {
+    const suffix = variantNumber === null ? '' : `?variant=${encodeURIComponent(variantNumber)}`;
+    const r = await fetch(`/api/episodes/${episodeId}/search${suffix}`, {method: 'POST'});
+    const data = await apiData(r);
+    const rows = data.results.map((x, i) => `<tr><td class="text-break">${escapeHtml(x.filename)}</td><td>${escapeHtml(x.username)}</td><td>${formatBytes(x.size)}</td><td>${formatBytes(x.uploadSpeed)}/s</td><td>${x.queueLength}</td><td>${x.score}</td><td class="text-end"><button class="btn btn-success btn-sm grab-btn" data-i="${i}"><i class="fa-solid fa-download"></i></button></td></tr>`).join('');
+    const warnings = Array.isArray(data.warnings) && data.warnings.length ? data.warnings : [];
+    if (warnings.length) showSoulseekarrNotification(`Soulseek search warning: ${warnings.join(' ')}`, 'warning');
+    const variantDecision = data.variantAdvanced
+      ? `No usable candidates survived filtering, so the current variant advanced to <code>${escapeHtml(data.nextQuery)}</code>.`
+      : `The current variant remains <code>${escapeHtml(data.nextQuery)}</code>.`;
+    const variantOptions = (data.variants || []).map(item => `<option value="${Number(item.variant)}" ${Number(item.variant) === Number(data.currentVariant) ? 'selected' : ''}>${Number(item.variant)} — ${escapeHtml(item.query)}</option>`).join('');
+    const variantPicker = `<div class="card bg-body-tertiary border-0 mb-3"><div class="card-body py-2"><div class="row g-2 align-items-end"><div class="col"><label class="form-label small mb-1" for="manualSearchVariant">Search variant</label><select class="form-select form-select-sm" id="manualSearchVariant">${variantOptions}</select></div><div class="col-auto"><button class="btn btn-outline-primary btn-sm" id="manualSearchAgain"><i class="fa-solid fa-magnifying-glass me-1"></i>Search selected</button></div></div><div class="small text-secondary mt-2">Searched <code>${escapeHtml(data.query)}</code> (variant ${data.variant}/${data.variantCount}). ${variantDecision}</div></div></div>`;
+    const d = data.slskdDiagnostics || {};
+    const diagnosticInfo = `<div class="small text-secondary mb-2">slskd API reported ${Number(d.stateResponseCount || 0)} response(s) / ${Number(d.stateFileCount || 0)} file(s); Soulseekarr collected ${Number(d.responseObjects || 0)} response object(s) / ${Number(d.collectedFiles || 0)} file(s); finalized: ${d.finalizedSeen ? 'yes' : 'no'}; polls: ${Number(d.finalizationPolls || 0)}.</div>`;
+    const historyInfo = `<div class="small text-secondary mb-3">Repeat protection hid ${Number(data.downloadedSkipped || 0)} previously downloaded file(s) and ${Number(data.activeSkipped || 0)} file(s) already active.</div>`;
+    body.innerHTML = `<div class="d-flex flex-wrap justify-content-between gap-2 mb-2"><div class="fw-semibold">${escapeHtml(data.episode.series_title)} ${escapeHtml(data.episode.episode_code)}</div><div class="text-secondary small">${data.accepted} acceptable of ${data.totalUnique} unique Soulseek files</div></div>${variantPicker}${diagnosticInfo}${historyInfo}<div class="table-responsive"><table class="table table-sm"><thead><tr><th>File</th><th>User</th><th>Size</th><th>Speed</th><th>Queue</th><th>Score</th><th></th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="text-center text-secondary py-4">No acceptable matches found.</td></tr>'}</tbody></table></div>`;
+
+    document.getElementById('manualSearchAgain')?.addEventListener('click', async () => {
+      const picker = document.getElementById('manualSearchVariant');
+      const selected = Number(picker?.value || 0);
+      if (!selected) return;
+      await runManualSearch(episodeId, selected);
+    });
+
+    document.querySelectorAll('.grab-btn').forEach(grab => grab.addEventListener('click', async () => {
+      const item = data.results[Number(grab.dataset.i)];
+      grab.disabled = true; grab.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+      try {
+        const dr = await fetch(`/api/episodes/${episodeId}/download`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({username:item.username, filename:item.filename, size:item.size})});
+        const queued = await apiData(dr);
+        grab.disabled = true;
+        grab.classList.remove('btn-success');
+        grab.classList.add('btn-outline-success');
+        grab.innerHTML = '<i class="fa-solid fa-check me-1"></i>Queued';
+        grab.closest('tr')?.classList.add('table-success');
+        const count = Number(queued.queuedCount || 1);
+        const queueMessage = queued.folderWarning
+          ? `${count} file${count === 1 ? '' : 's'} queued. ${queued.folderWarning}`
+          : (count > 1 ? `Queued ${count} episodes from this peer's season folder.` : 'Download queued.');
+        showSoulseekarrNotification(queueMessage, queued.folderWarning ? 'warning' : 'success');
+      } catch (err) {
+        grab.disabled=false; grab.innerHTML='<i class="fa-solid fa-download"></i>'; showSoulseekarrNotification(err.message || 'Could not queue download', 'danger');
+      }
+    }));
+  } catch (e) {
+    modal.hide();
+    showSoulseekarrNotification(e.message || 'Soulseek search failed.', 'danger');
+  }
+}
+
+async function runAutomaticEpisodeSearch(button) {
+  const episodeId = button?.dataset?.episodeId;
+  if (!episodeId || pendingAutoSearchButtons.has(String(episodeId))) return;
+  const row = button.closest('tr');
+  const rowButtons = row ? Array.from(row.querySelectorAll('button')) : [button];
+  const oldHtml = button.innerHTML;
+  rowButtons.forEach(item => item.disabled = true);
+  button.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+  try {
+    const response = await fetch(`/api/episodes/${episodeId}/auto-search/start`, {method: 'POST'});
+    const data = await apiData(response);
+    if (!data.started) {
+      showSoulseekarrNotification(data.message || 'A search is already running for this episode.', 'warning');
+      button.innerHTML = oldHtml;
+      rowButtons.forEach(item => item.disabled = false);
+      return;
+    }
+    pendingAutoSearchButtons.set(String(episodeId), {button, rowButtons, oldHtml});
+  } catch (err) {
+    showSoulseekarrNotification(err.message || 'Could not start automatic episode search.', 'danger');
+    button.innerHTML = oldHtml;
+    rowButtons.forEach(item => item.disabled = false);
+  }
+}
+
+window.addEventListener('soulseekarr:notification', async event => {
+  const detail = event.detail || {};
+  if (detail.topic !== 'targeted-search') return;
+  const episodeKey = String(detail.episode_id || '');
+  const pending = pendingAutoSearchButtons.get(episodeKey);
+  if (pending) {
+    pending.button.innerHTML = pending.oldHtml;
+    pending.rowButtons.forEach(item => item.disabled = false);
+    pendingAutoSearchButtons.delete(episodeKey);
+  }
+  missingPageCache.clear();
+  missingPageRequests.clear();
+  try {
+    renderMissingPayload(await loadMissingPage(currentMissingPage, {force: true}));
+  } catch (_) {}
+});
+
+document.getElementById('missingTableBody')?.addEventListener('click', async event => {
+  const manualButton = event.target.closest?.('.manual-search-btn');
+  if (manualButton) {
+    await runManualSearch(manualButton.dataset.episodeId);
+    return;
+  }
+  const autoButton = event.target.closest?.('.auto-search-btn');
+  if (autoButton) await runAutomaticEpisodeSearch(autoButton);
+});
+
+document.getElementById('autoCycle').addEventListener('click', async (e) => {
+  const b=e.currentTarget;
+  if (pendingAutoCycleButton) return;
+  b.disabled=true;
+  const old=b.innerHTML;
+  b.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>Running';
+  try {
+    const r=await fetch('/api/run-auto-cycle/start',{method:'POST'});
+    const data=await apiData(r);
+    if (!data.started) {
+      showSoulseekarrNotification(data.message || 'Automatic cycle is already running.', 'warning');
+      b.disabled=false;
+      b.innerHTML=old;
+      return;
+    }
+    pendingAutoCycleButton = {button:b, oldHtml:old};
+  } catch(err) {
+    showSoulseekarrNotification(err.message || 'Could not start automatic cycle.', 'danger');
+    b.disabled=false;
+    b.innerHTML=old;
+  }
+});
+
+window.addEventListener('soulseekarr:notification', event => {
+  const detail = event.detail || {};
+  if (detail.topic !== 'auto-cycle' || !pendingAutoCycleButton) return;
+  pendingAutoCycleButton.button.disabled = false;
+  pendingAutoCycleButton.button.innerHTML = pendingAutoCycleButton.oldHtml;
+  pendingAutoCycleButton = null;
+});
+
+function formatBytes(n) { if (!n) return '0 B'; const u=['B','KB','MB','GB','TB']; const i=Math.min(Math.floor(Math.log(n)/Math.log(1024)),u.length-1); return `${(n/Math.pow(1024,i)).toFixed(i>1?2:0)} ${u[i]}`; }
+function escapeHtml(v) { const d=document.createElement('div'); d.textContent=String(v ?? ''); return d.innerHTML; }
+</script>
+{% endblock %}

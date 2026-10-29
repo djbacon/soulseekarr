@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{% block title %}Dashboard · Soulseekarr{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+  <div>
+    <h4 class="mb-1">Dashboard</h4>
+    <div class="text-secondary small">Active downloads, recent episode searches, and current library totals.</div>
+  </div>
+</div>
+
+{% if not configured %}
+<div class="alert alert-warning">Configure Sonarr or Radarr, and slskd in <a href="/settings" class="alert-link">Settings</a> to populate Dashboard data.</div>
+{% endif %}
+
+<div class="card dashboard-card dashboard-stats-card mb-3">
+  <div class="card-header fw-semibold"><i class="fa-solid fa-chart-simple me-2"></i>Overview</div>
+  <div class="card-body py-3">
+    <div class="row g-3 dashboard-stats-row">
+      <div class="col-6 col-lg-3">
+        <a href="/missing" class="dashboard-stat text-decoration-none">
+          <span class="dashboard-stat-icon"><i class="fa-solid fa-list"></i></span>
+          <span class="dashboard-stat-copy">
+            <span class="dashboard-stat-value" id="dashboardMissingCount">0</span>
+            <span class="dashboard-stat-label">Missing episodes</span>
+          </span>
+        </a>
+      </div>
+      <div class="col-6 col-lg-3">
+        <a href="/series" class="dashboard-stat text-decoration-none">
+          <span class="dashboard-stat-icon"><i class="fa-solid fa-tv"></i></span>
+          <span class="dashboard-stat-copy">
+            <span class="dashboard-stat-value" id="dashboardSeriesCount">0 / 0</span>
+            <span class="dashboard-stat-label">Library enabled / total</span>
+          </span>
+        </a>
+      </div>
+      <div class="col-6 col-lg-3">
+        <a href="/downloads" class="dashboard-stat text-decoration-none">
+          <span class="dashboard-stat-icon"><i class="fa-solid fa-cloud-arrow-down"></i></span>
+          <span class="dashboard-stat-copy">
+            <span class="dashboard-stat-value" id="dashboardDownloadingCount">0</span>
+            <span class="dashboard-stat-label">Currently downloading</span>
+          </span>
+        </a>
+      </div>
+      <div class="col-6 col-lg-3">
+        <a href="/downloads" class="dashboard-stat text-decoration-none">
+          <span class="dashboard-stat-icon"><i class="fa-solid fa-clock"></i></span>
+          <span class="dashboard-stat-copy">
+            <span class="dashboard-stat-value" id="dashboardQueuedCount">0</span>
+            <span class="dashboard-stat-label">Queued downloads</span>
+          </span>
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="card dashboard-card mb-3">
+  <div class="card-header d-flex align-items-center justify-content-between gap-2">
+    <div class="fw-semibold"><i class="fa-solid fa-download me-2"></i>Active downloads</div>
+    <a href="/downloads" class="small text-decoration-none">View all <i class="fa-solid fa-chevron-right ms-1"></i></a>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle mb-0 dashboard-table dashboard-downloads-table" id="dashboardDownloadsTable">
+      <thead>
+        <tr>
+          <th class="dashboard-status-col" aria-label="Status"></th>
+          <th>Series</th>
+          <th class="dashboard-episode-col">Episode</th>
+          <th class="dashboard-quality-col">Quality</th>
+          <th class="dashboard-size-col text-end">File size</th>
+          <th class="dashboard-peer-col">Peer</th>
+          <th class="dashboard-speed-col">Speed</th>
+          <th class="dashboard-eta-col">Time left</th>
+          <th class="dashboard-progress-col">Progress</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="card-footer text-secondary small" id="dashboardDownloadsSummary"></div>
+</div>
+
+<div class="card dashboard-card mb-3">
+  <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2">
+    <div class="d-flex flex-wrap align-items-center gap-2 gap-md-3">
+      <div class="fw-semibold"><i class="fa-solid fa-magnifying-glass me-2"></i>Recent searches</div>
+      <div class="small text-secondary" id="dashboardNextSearchStatus">
+        <i class="fa-regular fa-clock me-1"></i><span id="dashboardNextSearchValue">Checking schedule...</span>
+      </div>
+    </div>
+    <a href="/history?tab=jobs" class="small text-decoration-none">View history <i class="fa-solid fa-chevron-right ms-1"></i></a>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle mb-0 dashboard-table dashboard-searches-table" id="dashboardSearchesTable">
+      <thead>
+        <tr>
+          <th class="dashboard-time-col">Updated</th>
+          <th class="dashboard-source-col">Source</th>
+          <th>Episode</th>
+          <th>Query</th>
+          <th class="dashboard-results-col">Results</th>
+          <th class="dashboard-search-status-col">Status</th>
+        </tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+  <div class="card-footer text-secondary small">Last 10 completed episode searches.</div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+const initialDashboard = {{ dashboard | tojson }};
+let dashboardRefreshInFlight = false;
+let dashboardLastErrors = {};
+let dashboardNextSearchAt = null;
+let dashboardNextSearchState = '';
+
+function dashboardEscape(value) {
+  const node = document.createElement('div');
+  node.textContent = String(value ?? '');
+  return node.innerHTML.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function dashboardFormatBytes(value) {
+  let bytes = Number(value || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return '—';
+  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  let unit = 0;
+  while (bytes >= 1024 && unit < units.length - 1) { bytes /= 1024; unit += 1; }
+  return `${bytes.toFixed(unit > 1 ? 2 : 0)} ${units[unit]}`;
+}
+
+function dashboardFormatDuration(value) {
+  const total = Math.max(0, Math.floor(Number(value || 0)));
+  const days = Math.floor(total / 86400);
+  const hours = Math.floor((total % 86400) / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  if (days) return `${days}d ${hours}h`;
+  if (hours) return `${hours}h ${minutes}m`;
+  if (minutes) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function dashboardTimeLeft(row) {
+  const status = String(row?.status || '').toLowerCase();
+  if (status === 'copying') return 'Preparing';
+  if (status === 'evaluating') return 'Scoring';
+  if (status === 'importing') return 'Importing';
+  if (row?.remainingSeconds !== null && row?.remainingSeconds !== undefined) {
+    return dashboardFormatDuration(row.remainingSeconds);
+  }
+  return '—';
+}
+
+function dashboardStatusIcon(status) {
+  const icons = {
+    queued: 'fa-clock',
+    downloading: 'fa-cloud-arrow-down',
+    copying: 'fa-file-arrow-down',
+    ready: 'fa-file-circle-check',
+    evaluating: 'fa-scale-balanced',
+    importing: 'fa-right-to-bracket',
+  };
+  return icons[String(status || '').toLowerCase()] || 'fa-circle-info';
+}
+
+function dashboardUpdatedAt(value) {
+  if (!value) return '—';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(date);
+}
+
+function dashboardFormatSearchRemaining(ms) {
+  if (ms <= 0) return 'due now';
+  const totalSeconds = Math.max(0, Math.ceil(ms / 1000));
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days) return `in ${days}d ${hours}h ${minutes}m`;
+  if (hours) return `in ${hours}h ${minutes}m ${seconds}s`;
+  if (minutes) return `in ${minutes}m ${seconds}s`;
+  return `in ${seconds}s`;
+}
+
+function dashboardFormatNextSearchTime(date) {
+  return new Intl.DateTimeFormat(undefined, {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  }).format(date);
+}
+
+function renderDashboardSearchSchedule(schedule) {
+  const value = document.getElementById('dashboardNextSearchValue');
+  if (!value) return;
+  dashboardNextSearchState = String(schedule?.state || '');
+  if (!schedule || schedule.state === 'running') {
+    dashboardNextSearchAt = null;
+    value.textContent = schedule?.message || 'Automatic search is running now.';
+    return;
+  }
+  if (!schedule.nextRunAt) {
+    dashboardNextSearchAt = null;
+    value.textContent = schedule.message || 'No automatic search is scheduled.';
+    return;
+  }
+  const parsed = new Date(schedule.nextRunAt);
+  if (Number.isNaN(parsed.getTime())) {
+    dashboardNextSearchAt = null;
+    value.textContent = schedule.message || 'Automatic search schedule unavailable.';
+    return;
+  }
+  dashboardNextSearchAt = parsed;
+  tickDashboardSearchCountdown();
+}
+
+function tickDashboardSearchCountdown() {
+  if (!dashboardNextSearchAt) return;
+  const value = document.getElementById('dashboardNextSearchValue');
+  if (!value) return;
+  const remaining = dashboardNextSearchAt.getTime() - Date.now();
+  value.textContent = `Next automatic search: ${dashboardFormatNextSearchTime(dashboardNextSearchAt)} (${dashboardFormatSearchRemaining(remaining)})`;
+}
+
+function renderDashboardDownloads(payload) {
+  const rows = Array.isArray(payload.downloads) ? payload.downloads : [];
+  const body = document.querySelector('#dashboardDownloadsTable tbody');
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="9" class="text-center text-secondary py-4">No active downloads.</td></tr>';
+  } else {
+    body.innerHTML = rows.map(row => {
+      const status = String(row.status || 'unknown');
+      const progress = Math.max(0, Math.min(100, Number(row.progressPercent || 0)));
+      const speed = Number(row.speedMbits || 0) > 0 ? `${Number(row.speedMbits).toFixed(2)} Mbit/s` : '—';
+      const fileSize = dashboardFormatBytes(row.size);
+      const timeLeft = dashboardTimeLeft(row);
+      const queue = row.isQueued && Number(row.placeInQueue || 0) > 0 ? ` · Queue #${Number(row.placeInQueue)}` : '';
+      const tooltip = [row.prepare_target_name, status + queue, row.message].filter(Boolean).join('\n');
+      return `<tr>
+        <td class="text-center"><i class="fa-solid ${dashboardStatusIcon(status)} status-icon status-icon-${dashboardEscape(status)}" title="${dashboardEscape(tooltip)}"></i></td>
+        <td class="text-truncate fw-semibold" title="${dashboardEscape(row.series_title)}">${dashboardEscape(row.series_title)}</td>
+        <td class="text-nowrap">${dashboardEscape(row.episode_code)}</td>
+        <td class="text-truncate" title="${dashboardEscape(row.quality || 'Unknown')}">${dashboardEscape(row.quality || 'Unknown')}</td>
+        <td class="text-nowrap text-end" title="${dashboardEscape(fileSize)}">${dashboardEscape(fileSize)}</td>
+        <td class="text-truncate" title="${dashboardEscape(row.username)}">${dashboardEscape(row.username)}</td>
+        <td class="text-nowrap">${dashboardEscape(speed)}</td>
+        <td class="text-nowrap">${dashboardEscape(timeLeft)}</td>
+        <td>
+          ${row.livePending ? `
+            <span class="download-progress-state text-secondary"><i class="fa-regular fa-clock me-1"></i>Waiting for snapshot…</span>
+          ` : row.waitingForPeerLimit ? `
+            <span class="download-progress-state text-secondary"><i class="fa-regular fa-clock me-1"></i>Peer limit wait</span>
+          ` : row.isQueued ? `
+            <span class="download-progress-state text-secondary"><i class="fa-regular fa-clock me-1"></i>Queued${Number(row.placeInQueue) > 0 ? ` #${Number(row.placeInQueue)}` : ''}${Number(row.queue_strikes || 0) > 0 ? ` · ${Number(row.queue_strikes)}/${Number(row.queueStrikeLimit || 168)}` : ''}</span>
+          ` : `
+            <div class="d-flex align-items-center gap-2">
+              <div class="progress dashboard-progress flex-grow-1" role="progressbar" aria-valuenow="${progress}" aria-valuemin="0" aria-valuemax="100"><div class="progress-bar" style="width:${progress}%"></div></div>
+              <span class="dashboard-progress-value">${progress.toFixed(0)}%</span>
+            </div>
+          `}
+        </td>
+      </tr>`;
+    }).join('');
+  }
+  const summary = document.getElementById('dashboardDownloadsSummary');
+  const count = Number(payload.activeDownloadCount || 0);
+  if (summary) summary.textContent = count > 10 ? `Showing first 10 of ${count} active downloads.` : `${count} active download${count === 1 ? '' : 's'}.`;
+}
+
+function renderDashboardSearches(payload) {
+  const rows = Array.isArray(payload.searches) ? payload.searches : [];
+  const body = document.querySelector('#dashboardSearchesTable tbody');
+  if (!body) return;
+  if (!rows.length) {
+    body.innerHTML = '<tr><td colspan="6" class="text-center text-secondary py-4">No episode searches recorded yet.</td></tr>';
+    return;
+  }
+  body.innerHTML = rows.map(row => {
+    const resultSummary = `${Number(row.resultCount || 0)} / ${Number(row.usableCount || 0)} / ${Number(row.queuedCount || 0)}`;
+    const episode = [row.episodeTitle, row.episodeCode].filter(Boolean).join(' · ');
+    return `<tr title="${dashboardEscape(row.message || '')}">
+      <td class="text-nowrap text-secondary">${dashboardEscape(dashboardUpdatedAt(row.updatedAt))}</td>
+      <td><span class="badge text-bg-dark border">${dashboardEscape(row.source)}</span></td>
+      <td class="text-truncate" title="${dashboardEscape(episode)}">${dashboardEscape(episode || '—')}</td>
+      <td class="text-truncate font-monospace" title="${dashboardEscape(row.query)}">${dashboardEscape(row.query || '—')}</td>
+      <td class="text-nowrap" title="Raw / usable / queued">${dashboardEscape(resultSummary)}</td>
+      <td><span class="badge text-bg-${dashboardEscape(row.level || 'secondary')}">${dashboardEscape(row.status || 'Searched')}</span></td>
+    </tr>`;
+  }).join('');
+}
+
+function renderDashboardStats(payload) {
+  const stats = payload.stats || {};
+  document.getElementById('dashboardMissingCount').textContent = Number(stats.missingEpisodes || 0).toLocaleString();
+  document.getElementById('dashboardSeriesCount').textContent = `${Number(stats.seriesEnabled || 0).toLocaleString()} / ${Number(stats.seriesTotal || 0).toLocaleString()}`;
+  document.getElementById('dashboardDownloadingCount').textContent = Number(stats.downloading || 0).toLocaleString();
+  document.getElementById('dashboardQueuedCount').textContent = Number(stats.queued || 0).toLocaleString();
+}
+
+function renderDashboardErrors(payload) {
+  const errors = payload.errors || {};
+  for (const [key, value] of Object.entries(errors)) {
+    const message = String(value || '').trim();
+    if (!message || dashboardLastErrors[key] === message) continue;
+    dashboardLastErrors[key] = message;
+    showSoulseekarrNotification(`${key === 'missing' ? 'Sonarr missing count' : key === 'downloads' ? 'slskd download snapshot' : 'Sonarr TV-show snapshot'}: ${message}`, 'warning');
+  }
+}
+
+function renderDashboard(payload) {
+  renderDashboardDownloads(payload || {});
+  renderDashboardSearches(payload || {});
+  renderDashboardSearchSchedule(payload?.autoSearchSchedule || {});
+  renderDashboardStats(payload || {});
+  renderDashboardErrors(payload || {});
+}
+
+async function refreshDashboard() {
+  if (dashboardRefreshInFlight || document.visibilityState === 'hidden') return;
+  dashboardRefreshInFlight = true;
+  try {
+    const response = await fetch('/api/dashboard', {cache: 'no-store'});
+    renderDashboard(await apiData(response));
+  } catch (error) {
+    showSoulseekarrNotification(error.message || 'Could not refresh Dashboard.', 'danger');
+  } finally {
+    dashboardRefreshInFlight = false;
+  }
+}
+
+renderDashboard(initialDashboard);
+setInterval(tickDashboardSearchCountdown, 1000);
+setInterval(refreshDashboard, 5000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') void refreshDashboard();
+});
+window.addEventListener('focus', refreshDashboard);
+</script>
+{% endblock %}

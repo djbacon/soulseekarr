@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en" data-bs-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="soulseekarr-csrf" content="{{ csrf_token }}">
+  <title>{% block title %}Soulseekarr{% endblock %}</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css" integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB" crossorigin="anonymous">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/7.0.1/css/all.min.css" integrity="sha512-2SwdPD6INVrV/lHTZbO2nodKhrnDdJK9/kg2XD1r9uGqPo1cUbujc+IYdlYdEErWNu69gVcYgdxlmVmzTWnetw==" crossorigin="anonymous">
+  <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}?v={{ app_version }}">
+</head>
+<body>
+<nav class="navbar navbar-expand-lg border-bottom mb-4">
+  <div class="container-fluid app-width">
+    <a class="navbar-brand fw-bold d-flex align-items-baseline" href="/"><i class="fa-solid fa-magnifying-glass-arrow-right me-2"></i><span>Soulseekarr</span><small class="app-version ms-2">v{{ app_version }}</small></a>
+    <div class="navbar-nav ms-auto">
+      <a class="nav-link{% if request.url.path == '/' %} active{% endif %}" href="/"><i class="fa-solid fa-gauge-high me-1"></i>Dashboard</a>
+      <a class="nav-link{% if request.url.path == '/missing' %} active{% endif %}" href="/missing"><i class="fa-solid fa-list me-1"></i>Missing</a>
+      <a class="nav-link{% if request.url.path == '/upgrade' %} active{% endif %}" href="/upgrade"><i class="fa-solid fa-arrow-up-right-dots me-1"></i>Upgrade</a>
+      <a class="nav-link{% if request.url.path == '/series' %} active{% endif %}" href="/series"><i class="fa-solid fa-tv me-1"></i>Library</a>
+      <a class="nav-link{% if request.url.path == '/downloads' %} active{% endif %}" href="/downloads"><i class="fa-solid fa-download me-1"></i>Downloads</a>
+      <a class="nav-link{% if request.url.path in ['/history', '/jobs'] %} active{% endif %}" href="/history"><i class="fa-solid fa-clock-rotate-left me-1"></i>History</a>
+      <a class="nav-link{% if request.url.path == '/settings' %} active{% endif %}" href="/settings"><i class="fa-solid fa-gear me-1"></i>Settings</a>
+    </div>
+  </div>
+</nav>
+<main class="container-fluid app-width pb-5">
+  {% block content %}{% endblock %}
+</main>
+<div id="soulseekarrNotifications" class="soulseekarr-notifications" aria-live="polite" aria-relevant="additions"></div>
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js" integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI" crossorigin="anonymous"></script>
+<script nonce="{{ request.state.csp_nonce }}">
+const SOULSEEKARR_CSRF_TOKEN = document.querySelector('meta[name="soulseekarr-csrf"]')?.content || '';
+const SOULSEEKARR_NATIVE_FETCH = window.fetch.bind(window);
+window.fetch = function soulseekarrFetch(input, init) {
+  const options = init ? {...init} : {};
+  try {
+    const sourceRequest = input instanceof Request ? input : null;
+    const method = String(options.method || sourceRequest?.method || 'GET').toUpperCase();
+    const url = new URL(sourceRequest?.url || String(input), window.location.href);
+    if (url.origin === window.location.origin && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+      const headers = new Headers(sourceRequest?.headers || undefined);
+      if (options.headers) {
+        new Headers(options.headers).forEach((value, key) => headers.set(key, value));
+      }
+      headers.set('X-Soulseekarr-CSRF', SOULSEEKARR_CSRF_TOKEN);
+      options.headers = headers;
+    }
+  } catch (_) {}
+  return SOULSEEKARR_NATIVE_FETCH(input, options);
+};
+
+async function apiData(response) {
+  const text = await response.text();
+  let data = {};
+  if (text) {
+    try { data = JSON.parse(text); }
+    catch (_) { data = {detail: text}; }
+  }
+  if (!response.ok) {
+    const error = new Error(data.detail || data.error || text || `Request failed (HTTP ${response.status})`);
+    error.status = response.status;
+    error.data = data;
+    throw error;
+  }
+  return data;
+}
+
+const SOULSEEKARR_NOTIFICATION_TIMEOUT_MS = 5000;
+const SOULSEEKARR_NOTIFICATION_ACTIVE_KEY = 'soulseekarr.activeNotifications.v1';
+const SOULSEEKARR_NOTIFICATION_CURSOR_KEY = 'soulseekarr.notificationCursor.v1';
+const SOULSEEKARR_NOTIFICATION_BOOTSTRAP_ID = {{ notification_latest_id() }};
+let soulseekarrNotificationSequence = 0;
+let soulseekarrNotificationPollInFlight = false;
+
+function readSoulseekarrActiveNotifications() {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem(SOULSEEKARR_NOTIFICATION_ACTIVE_KEY) || '[]');
+    if (!Array.isArray(parsed)) return [];
+    const now = Date.now();
+    return parsed.filter(item => item && Number(item.expiresAt || 0) > now && item.key && item.message);
+  } catch (_) {
+    return [];
+  }
+}
+
+function writeSoulseekarrActiveNotifications(items) {
+  try {
+    sessionStorage.setItem(SOULSEEKARR_NOTIFICATION_ACTIVE_KEY, JSON.stringify(items));
+  } catch (_) {}
+}
+
+function rememberSoulseekarrNotification(item) {
+  const items = readSoulseekarrActiveNotifications().filter(existing => existing.key !== item.key);
+  items.push(item);
+  writeSoulseekarrActiveNotifications(items);
+}
+
+function forgetSoulseekarrNotification(key) {
+  if (!key) return;
+  const items = readSoulseekarrActiveNotifications().filter(item => item.key !== key);
+  writeSoulseekarrActiveNotifications(items);
+}
+
+function dismissSoulseekarrNotification(notification) {
+  if (!notification || notification.dataset.dismissed === 'true') return;
+  notification.dataset.dismissed = 'true';
+  if (notification._soulseekarrTimer) clearTimeout(notification._soulseekarrTimer);
+  forgetSoulseekarrNotification(notification.dataset.notificationKey || '');
+  notification.classList.add('is-hiding');
+  setTimeout(() => notification.remove(), 180);
+}
+
+function showSoulseekarrNotification(
+  message,
+  level = 'info',
+  timeoutMs = SOULSEEKARR_NOTIFICATION_TIMEOUT_MS,
+  notificationKey = null,
+  expiresAt = null,
+) {
+  const container = document.getElementById('soulseekarrNotifications');
+  if (!container || !message) return null;
+
+  const allowedLevels = new Set(['info', 'success', 'warning', 'danger']);
+  const safeLevel = allowedLevels.has(level) ? level : 'info';
+  const safeTimeout = Math.max(0, Number(timeoutMs) || SOULSEEKARR_NOTIFICATION_TIMEOUT_MS);
+  const key = String(notificationKey || `local:${Date.now()}:${++soulseekarrNotificationSequence}`);
+  const expiry = Number(expiresAt || (Date.now() + safeTimeout));
+  const remainingMs = expiry - Date.now();
+  if (remainingMs <= 0) {
+    forgetSoulseekarrNotification(key);
+    return null;
+  }
+
+  for (const existing of container.children) {
+    if (existing.dataset?.notificationKey === key && existing.dataset.dismissed !== 'true') return existing;
+  }
+
+  const iconByLevel = {
+    info: 'fa-circle-info',
+    success: 'fa-circle-check',
+    warning: 'fa-triangle-exclamation',
+    danger: 'fa-circle-exclamation',
+  };
+
+  const notification = document.createElement('div');
+  notification.className = `soulseekarr-notification soulseekarr-notification-${safeLevel}`;
+  notification.dataset.notificationKey = key;
+  notification.setAttribute('role', safeLevel === 'danger' ? 'alert' : 'status');
+
+  const icon = document.createElement('i');
+  icon.className = `fa-solid ${iconByLevel[safeLevel]} soulseekarr-notification-icon`;
+  icon.setAttribute('aria-hidden', 'true');
+
+  const text = document.createElement('div');
+  text.className = 'soulseekarr-notification-message';
+  text.textContent = String(message);
+
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.className = 'soulseekarr-notification-close';
+  close.setAttribute('aria-label', 'Dismiss notification');
+  close.innerHTML = '<i class="fa-solid fa-xmark" aria-hidden="true"></i>';
+  close.addEventListener('click', () => dismissSoulseekarrNotification(notification));
+
+  notification.append(icon, text, close);
+  container.prepend(notification);
+  rememberSoulseekarrNotification({key, message: String(message), level: safeLevel, expiresAt: expiry});
+  requestAnimationFrame(() => notification.classList.add('is-visible'));
+  notification._soulseekarrTimer = setTimeout(
+    () => dismissSoulseekarrNotification(notification),
+    remainingMs,
+  );
+  return notification;
+}
+
+function restoreSoulseekarrNotifications() {
+  const items = readSoulseekarrActiveNotifications();
+  writeSoulseekarrActiveNotifications(items);
+  for (const item of items) {
+    showSoulseekarrNotification(
+      item.message,
+      item.level,
+      Math.max(0, Number(item.expiresAt) - Date.now()),
+      item.key,
+      Number(item.expiresAt),
+    );
+  }
+}
+
+function soulseekarrNotificationCursor() {
+  try {
+    const raw = sessionStorage.getItem(SOULSEEKARR_NOTIFICATION_CURSOR_KEY);
+    if (raw === null) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) && value >= 0 ? Math.floor(value) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function setSoulseekarrNotificationCursor(value) {
+  try { sessionStorage.setItem(SOULSEEKARR_NOTIFICATION_CURSOR_KEY, String(Math.max(0, Number(value) || 0))); }
+  catch (_) {}
+}
+
+async function pollSoulseekarrNotifications() {
+  if (soulseekarrNotificationPollInFlight || document.visibilityState === 'hidden') return;
+  soulseekarrNotificationPollInFlight = true;
+  try {
+    const cursor = soulseekarrNotificationCursor();
+    const response = await fetch(`/api/notifications?after=${encodeURIComponent(cursor ?? 0)}`, {cache: 'no-store'});
+    const data = await apiData(response);
+    const rows = Array.isArray(data.notifications) ? data.notifications : [];
+    const latestId = Math.max(0, Number(data.latestId || 0));
+
+    // A new browser tab/session starts at the current tail so stale messages
+    // from a previous visit are not replayed. Navigation within the same tab
+    // keeps the cursor in sessionStorage and receives anything completed while
+    // the document was changing pages.
+    if (cursor === null) {
+      setSoulseekarrNotificationCursor(latestId);
+      return;
+    }
+
+    let nextCursor = cursor;
+    for (const item of rows) {
+      const id = Math.max(0, Number(item.id || 0));
+      if (!id) continue;
+      showSoulseekarrNotification(
+        item.message,
+        item.level || 'info',
+        SOULSEEKARR_NOTIFICATION_TIMEOUT_MS,
+        `server:${id}`,
+      );
+      window.dispatchEvent(new CustomEvent('soulseekarr:notification', {detail: item}));
+      nextCursor = Math.max(nextCursor, id);
+    }
+    if (!rows.length && latestId > nextCursor) nextCursor = latestId;
+    setSoulseekarrNotificationCursor(nextCursor);
+  } catch (_) {
+    // Notification delivery is best-effort. The next poll retries from the
+    // persisted cursor and no user action is interrupted by a feed outage.
+  } finally {
+    soulseekarrNotificationPollInFlight = false;
+  }
+}
+
+if (soulseekarrNotificationCursor() === null) {
+  setSoulseekarrNotificationCursor(SOULSEEKARR_NOTIFICATION_BOOTSTRAP_ID);
+}
+restoreSoulseekarrNotifications();
+void pollSoulseekarrNotifications();
+setInterval(pollSoulseekarrNotifications, 1000);
+window.addEventListener('focus', pollSoulseekarrNotifications);
+
+const SOULSEEKARR_PAGE_VERSION = {{ app_version | tojson }};
+const SOULSEEKARR_VERSION_CHECK_MS = 30000;
+let soulseekarrVersionReloading = false;
+
+function removeVersionReloadMarker() {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('_soulseekarr_reload')) return;
+    url.searchParams.delete('_soulseekarr_reload');
+    url.searchParams.delete('_soulseekarr_version');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch (_) {}
+}
+
+async function clearSoulseekarrBrowserCaches() {
+  // Cache Storage and service workers are not currently required by Soulseekarr,
+  // but clear/unregister them as well so a future PWA layer cannot serve an old UI.
+  try {
+    if ('caches' in window) {
+      const names = await window.caches.keys();
+      await Promise.all(names.map(name => window.caches.delete(name)));
+    }
+  } catch (_) {}
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map(registration => registration.unregister()));
+    }
+  } catch (_) {}
+}
+
+async function reloadForSoulseekarrVersion(serverVersion) {
+  if (soulseekarrVersionReloading) return;
+  soulseekarrVersionReloading = true;
+
+  await clearSoulseekarrBrowserCaches();
+
+  // A unique document URL forces the next navigation past the normal HTTP
+  // cache. Versioned local assets (for example app.css?v=...) then follow the
+  // new server version as well. The temporary marker is removed after load.
+  const url = new URL(window.location.href);
+  url.searchParams.set('_soulseekarr_version', serverVersion);
+  url.searchParams.set('_soulseekarr_reload', String(Date.now()));
+  window.location.replace(url.toString());
+}
+
+async function checkSoulseekarrVersion() {
+  if (soulseekarrVersionReloading || document.visibilityState === 'hidden') return;
+  try {
+    const response = await fetch(`/api/app-version?_=${Date.now()}`, {
+      cache: 'no-store',
+      headers: {'Cache-Control': 'no-cache'},
+    });
+    if (!response.ok) return;
+    const serverVersion = (await response.text()).trim();
+    if (serverVersion && serverVersion !== SOULSEEKARR_PAGE_VERSION) {
+      await reloadForSoulseekarrVersion(serverVersion);
+    }
+  } catch (_) {
+    // A restart/update can briefly make the endpoint unavailable. The next
+    // interval will retry without disturbing the page.
+  }
+}
+
+removeVersionReloadMarker();
+setInterval(checkSoulseekarrVersion, SOULSEEKARR_VERSION_CHECK_MS);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') checkSoulseekarrVersion();
+});
+window.addEventListener('focus', checkSoulseekarrVersion);
+setTimeout(checkSoulseekarrVersion, 1000);
+</script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,364 @@
+{% extends "base.html" %}
+{% block title %}Library · Soulseekarr{% endblock %}
+{% block content %}
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+  <div>
+    <h1 class="h3 mb-1">Library</h1>
+    <div class="text-secondary small">Choose which Sonarr series and Radarr movies Soulseekarr may search and download. Newly discovered titles use the default configured in <a href="/settings">Settings</a>.</div>
+  </div>
+  <button class="btn btn-outline-secondary btn-sm" type="button" id="seriesRefreshButton"><i class="fa-solid fa-rotate me-1"></i>Refresh</button>
+</div>
+
+
+<section class="card shadow-sm mb-3" aria-labelledby="tvShowsSectionTitle">
+  <div class="card-header d-flex flex-wrap align-items-center justify-content-between gap-2 py-2">
+    <div>
+      <div class="fw-semibold" id="tvShowsSectionTitle">Library</div>
+      <div class="small text-secondary" id="seriesCountSummary"><span id="seriesEnabledCount">{{ series_enabled_count }}</span> enabled of {{ series_total_count }} titles{% if series_query %} · {{ pagination.total }} matching{% endif %}</div>
+      <div class="small text-secondary" id="seriesSyncState" data-refreshed-at="{{ series_snapshot_refreshed_at or '' }}">{% if series_snapshot_refreshed_at %}Background snapshot available{% else %}Waiting for first background library sync{% endif %}</div>
+    </div>
+    <span class="small text-secondary" id="seriesSaveState"></span>
+  </div>
+  <div class="card-body border-bottom py-2">
+    <form class="d-flex flex-wrap gap-2" id="seriesFilterForm" role="search">
+      <div class="input-group input-group-sm series-filter-wrap">
+        <span class="input-group-text"><i class="fa-solid fa-magnifying-glass"></i></span>
+        <input class="form-control" id="seriesFilterInput" name="q" type="search" placeholder="Filter series and movies" autocomplete="off" value="{{ series_query }}">
+      </div>
+      <button class="btn btn-outline-primary btn-sm" type="submit">Filter</button>
+      <button class="btn btn-outline-secondary btn-sm{% if not series_query %} d-none{% endif %}" type="button" id="seriesFilterClear">Clear</button>
+    </form>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-hover table-sm align-middle mb-0 series-table" id="seriesTable">
+      <thead><tr><th>Title</th><th class="series-year-col">Year</th><th class="series-monitor-col">Monitoring</th><th class="series-search-col">Search format</th><th class="series-toggle-col text-center">Download</th></tr></thead>
+      <tbody id="seriesTableBody">
+      {% for series in series_options %}
+        <tr class="series-row{% if not series.download_enabled %} series-row-disabled{% endif %}" data-series-id="{{ series.id }}">
+          <td class="fw-semibold series-name">{{ series.title }}{% if series.media_type == "movie" %} <span class="badge text-bg-secondary">Movie</span>{% endif %}</td>
+          <td class="text-secondary">{{ series.year or '—' }}</td>
+          <td>
+            {% if series.monitored %}
+              <span class="badge text-bg-success">Monitored</span>
+            {% else %}
+              <span class="badge text-bg-secondary">Unmonitored</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if series.media_type == "movie" %}<span class="text-secondary small">Title + year</span>{% else %}
+            <select class="form-select form-select-sm series-search-mode" data-series-id="{{ series.id }}" data-saved-mode="{{ series.search_mode }}" aria-label="Episode search format for {{ series.title }}">
+              <option value="current"{% if series.search_mode == 'current' %} selected{% endif %}>Current · S01E01</option>
+              <option value="legacy"{% if series.search_mode == 'legacy' %} selected{% endif %}>Legacy · 1x01</option>
+              <option value="both"{% if series.search_mode == 'both' %} selected{% endif %}>Both</option>
+            </select>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            <div class="form-check form-switch d-inline-flex m-0">
+              <input class="form-check-input series-download-toggle m-0" type="checkbox" role="switch" data-series-id="{{ series.id }}" aria-label="Download {{ series.title }}" {% if series.download_enabled %}checked{% endif %}>
+            </div>
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="5" class="text-center text-secondary py-4">{% if series_query %}No titles match this filter.{% else %}No titles returned by Sonarr or Radarr.{% endif %}</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-2">
+  <div class="text-secondary small" id="seriesPageSummary">Showing {{ pagination.start }}–{{ pagination.end }} of {{ pagination.total }} titles</div>
+  <div class="btn-group btn-group-sm" role="group" aria-label="Library pagination">
+    <button class="btn btn-outline-secondary" type="button" id="seriesPrevPage"{% if pagination.page <= 1 %} disabled{% endif %}><i class="fa-solid fa-chevron-left me-1"></i>Previous</button>
+    <span class="btn btn-outline-secondary disabled" id="seriesPageLabel">Page {{ pagination.page }} of {{ pagination.totalPages }}</span>
+    <button class="btn btn-outline-secondary" type="button" id="seriesNextPage"{% if pagination.page >= pagination.totalPages %} disabled{% endif %}>Next<i class="fa-solid fa-chevron-right ms-1"></i></button>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script nonce="{{ request.state.csp_nonce }}">
+{% if not configured %}showSoulseekarrNotification('Configure Sonarr or Radarr, and slskd in Settings first.', 'warning');{% endif %}
+function removeLegacySeriesPageQuery() {
+  try {
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has('page')) return;
+    url.searchParams.delete('page');
+    window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`);
+  } catch (_) {}
+}
+
+// Older Soulseekarr versions used /series?page=N. Keep an old bookmark usable,
+// but immediately canonicalize the visible URL without reloading the page.
+removeLegacySeriesPageQuery();
+
+const initialSeriesPayload = {
+  seriesOptions: {{ series_options | tojson }},
+  seriesEnabledCount: {{ series_enabled_count | tojson }},
+  seriesTotalCount: {{ series_total_count | tojson }},
+  seriesQuery: {{ series_query | tojson }},
+  pagination: {{ pagination | tojson }},
+  error: {{ error | tojson }},
+  snapshotRefreshedAt: {{ series_snapshot_refreshed_at | tojson }},
+  snapshotErrorAt: {{ series_snapshot_error_at | tojson }},
+};
+let lastSeriesError = '';
+if (initialSeriesPayload.error) {
+  lastSeriesError = String(initialSeriesPayload.error);
+  showSoulseekarrNotification(lastSeriesError, 'danger');
+}
+let enabledSeriesCount = Number(initialSeriesPayload.seriesEnabledCount || 0);
+let currentSeriesQuery = String(initialSeriesPayload.seriesQuery || '');
+let currentSeriesPage = Number(initialSeriesPayload.pagination.page || 1);
+const seriesPageCache = new Map();
+const seriesPageRequests = new Map();
+
+function seriesCacheKey(page, query = currentSeriesQuery) {
+  return `${String(query || '').trim().toLocaleLowerCase()}\u0000${Number(page || 1)}`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#039;');
+}
+
+function renderSeriesRows(items, query) {
+  const body = document.getElementById('seriesTableBody');
+  if (!body) return;
+  if (!Array.isArray(items) || !items.length) {
+    body.innerHTML = `<tr><td colspan="5" class="text-center text-secondary py-4">${query ? 'No titles match this filter.' : 'No titles returned by Sonarr or Radarr.'}</td></tr>`;
+    return;
+  }
+  body.innerHTML = items.map(series => `
+    <tr class="series-row${series.download_enabled ? '' : ' series-row-disabled'}" data-series-id="${Number(series.id)}">
+      <td class="fw-semibold series-name">${escapeHtml(series.title)}${series.media_type === 'movie' ? ' <span class="badge text-bg-secondary">Movie</span>' : ''}</td>
+      <td class="text-secondary">${series.year ? escapeHtml(series.year) : '—'}</td>
+      <td>${series.monitored ? '<span class="badge text-bg-success">Monitored</span>' : '<span class="badge text-bg-secondary">Unmonitored</span>'}</td>
+      <td>
+        ${series.media_type === 'movie' ? '<span class="text-secondary small">Title + year</span>' : `        <select class="form-select form-select-sm series-search-mode" data-series-id="${Number(series.id)}" data-saved-mode="${escapeHtml(String(series.search_mode || 'current'))}" aria-label="Episode search format for ${escapeHtml(series.title)}">
+          <option value="current" ${String(series.search_mode || 'current') === 'current' ? 'selected' : ''}>Current · S01E01</option>
+          <option value="legacy" ${String(series.search_mode || 'current') === 'legacy' ? 'selected' : ''}>Legacy · 1x01</option>
+          <option value="both" ${String(series.search_mode || 'current') === 'both' ? 'selected' : ''}>Both</option>
+        </select>`}
+      </td>
+      <td class="text-center">
+        <div class="form-check form-switch d-inline-flex m-0">
+          <input class="form-check-input series-download-toggle m-0" type="checkbox" role="switch" data-series-id="${Number(series.id)}" aria-label="Download ${escapeHtml(series.title)}" ${series.download_enabled ? 'checked' : ''}>
+        </div>
+      </td>
+    </tr>`).join('');
+}
+
+function updateSeriesEnabledCount(delta) {
+  enabledSeriesCount = Math.max(0, enabledSeriesCount + Number(delta || 0));
+  const el = document.getElementById('seriesEnabledCount');
+  if (el) el.textContent = String(enabledSeriesCount);
+  for (const payload of seriesPageCache.values()) payload.seriesEnabledCount = enabledSeriesCount;
+}
+
+function formatSeriesSnapshotTime(value) {
+  if (!value) return 'Waiting for first background library sync';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Background snapshot available';
+  return `Last background sync ${date.toLocaleString()}`;
+}
+
+function renderSeriesPayload(payload) {
+  if (!payload || !payload.pagination) return;
+  currentSeriesPage = Number(payload.pagination.page || 1);
+  enabledSeriesCount = Number(payload.seriesEnabledCount || 0);
+  renderSeriesRows(payload.seriesOptions, currentSeriesQuery);
+
+  const enabled = document.getElementById('seriesEnabledCount');
+  if (enabled) enabled.textContent = String(enabledSeriesCount);
+  const count = document.getElementById('seriesCountSummary');
+  if (count) count.innerHTML = `<span id="seriesEnabledCount">${enabledSeriesCount}</span> enabled of ${Number(payload.seriesTotalCount || 0)} titles${currentSeriesQuery ? ` · ${Number(payload.pagination.total || 0)} matching` : ''}`;
+  const summary = document.getElementById('seriesPageSummary');
+  const total = Number(payload.pagination.total || 0);
+  if (summary) summary.textContent = `Showing ${Number(payload.pagination.start || 0)}–${Number(payload.pagination.end || 0)} of ${total} titles`;
+  const label = document.getElementById('seriesPageLabel');
+  if (label) label.textContent = `Page ${currentSeriesPage} of ${Number(payload.pagination.totalPages || 1)}`;
+  const prev = document.getElementById('seriesPrevPage');
+  const next = document.getElementById('seriesNextPage');
+  if (prev) prev.disabled = currentSeriesPage <= 1;
+  if (next) next.disabled = currentSeriesPage >= Number(payload.pagination.totalPages || 1);
+  const clear = document.getElementById('seriesFilterClear');
+  if (clear) clear.classList.toggle('d-none', !currentSeriesQuery);
+  const nextError = String(payload.error || '');
+  if (nextError && nextError !== lastSeriesError) showSoulseekarrNotification(nextError, 'danger');
+  lastSeriesError = nextError;
+  const syncState = document.getElementById('seriesSyncState');
+  if (syncState) syncState.textContent = formatSeriesSnapshotTime(payload.snapshotRefreshedAt);
+
+  prefetchAdjacentSeriesPage(payload.pagination);
+}
+
+async function loadSeriesPage(page, {force = false} = {}) {
+  const safePage = Math.max(1, Number(page || 1));
+  const key = seriesCacheKey(safePage);
+  if (!force && seriesPageCache.has(key)) return seriesPageCache.get(key);
+  if (!force && seriesPageRequests.has(key)) return seriesPageRequests.get(key);
+
+  const url = new URL(`/api/series/page/${safePage}`, window.location.origin);
+  if (currentSeriesQuery) url.searchParams.set('q', currentSeriesQuery);
+  if (force) url.searchParams.set('refresh', 'true');
+
+  const request = fetch(url.toString(), {cache: 'no-store'})
+    .then(apiData)
+    .then(payload => {
+      seriesPageCache.set(key, payload);
+      return payload;
+    })
+    .finally(() => seriesPageRequests.delete(key));
+  seriesPageRequests.set(key, request);
+  return request;
+}
+
+function prefetchAdjacentSeriesPage(pagination) {
+  const page = Number(pagination.page || 1);
+  const totalPages = Number(pagination.totalPages || 1);
+  // The next page is intentionally fetched before the user asks for it so the
+  // Next button normally swaps local data with no network wait or page reload.
+  if (page < totalPages) void loadSeriesPage(page + 1).catch(() => {});
+  if (page > 1) void loadSeriesPage(page - 1).catch(() => {});
+}
+
+async function navigateSeriesPage(page) {
+  const prev = document.getElementById('seriesPrevPage');
+  const next = document.getElementById('seriesNextPage');
+  if (prev) prev.disabled = true;
+  if (next) next.disabled = true;
+  try {
+    renderSeriesPayload(await loadSeriesPage(page));
+  } catch (err) {
+    showSoulseekarrNotification(err.message || 'Could not load Library', 'danger');
+    // Restore controls from the current cached page if loading failed.
+    const current = seriesPageCache.get(seriesCacheKey(currentSeriesPage));
+    if (current) renderSeriesPayload(current);
+  }
+}
+
+seriesPageCache.set(seriesCacheKey(currentSeriesPage), initialSeriesPayload);
+prefetchAdjacentSeriesPage(initialSeriesPayload.pagination);
+
+document.getElementById('seriesPrevPage')?.addEventListener('click', () => navigateSeriesPage(currentSeriesPage - 1));
+document.getElementById('seriesNextPage')?.addEventListener('click', () => navigateSeriesPage(currentSeriesPage + 1));
+
+document.getElementById('seriesFilterForm')?.addEventListener('submit', async event => {
+  event.preventDefault();
+  currentSeriesQuery = String(document.getElementById('seriesFilterInput')?.value || '').trim();
+  seriesPageCache.clear();
+  seriesPageRequests.clear();
+  await navigateSeriesPage(1);
+});
+
+document.getElementById('seriesFilterClear')?.addEventListener('click', async () => {
+  const input = document.getElementById('seriesFilterInput');
+  if (input) input.value = '';
+  currentSeriesQuery = '';
+  seriesPageCache.clear();
+  seriesPageRequests.clear();
+  await navigateSeriesPage(1);
+});
+
+document.getElementById('seriesRefreshButton')?.addEventListener('click', async event => {
+  const button = event.currentTarget;
+  if (button) button.disabled = true;
+  const state = document.getElementById('seriesSaveState');
+  try {
+    seriesPageCache.clear();
+    seriesPageRequests.clear();
+    // refresh=true only signals the background worker; this response still
+    // comes entirely from SQLite and never waits on Sonarr.
+    renderSeriesPayload(await loadSeriesPage(currentSeriesPage, {force: true}));
+    showSoulseekarrNotification('Background Library refresh requested.', 'info');
+    window.setTimeout(async () => {
+      try {
+        seriesPageCache.delete(seriesCacheKey(currentSeriesPage));
+        renderSeriesPayload(await loadSeriesPage(currentSeriesPage));
+      } catch (_) {}
+    }, 1500);
+  } finally {
+    if (button) button.disabled = false;
+    window.setTimeout(() => { if (state) state.textContent = ''; }, 2200);
+  }
+});
+
+// Keep the visible page synchronized with the latest persisted background
+// snapshot. These requests are local SQLite reads, not live Sonarr calls.
+window.setInterval(async () => {
+  if (document.hidden) return;
+  try {
+    seriesPageCache.delete(seriesCacheKey(currentSeriesPage));
+    renderSeriesPayload(await loadSeriesPage(currentSeriesPage));
+  } catch (_) {}
+}, 10000);
+
+document.getElementById('seriesTableBody')?.addEventListener('change', async event => {
+  const searchMode = event.target.closest?.('.series-search-mode');
+  if (searchMode) {
+    const seriesId = searchMode.dataset.seriesId;
+    const mode = String(searchMode.value || 'current');
+    const previous = String(searchMode.dataset.savedMode || '');
+    searchMode.disabled = true;
+    try {
+      const r = await fetch(`/api/series/${seriesId}/search-mode`, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({mode}),
+      });
+      const saved = await apiData(r);
+      searchMode.value = saved.mode;
+      searchMode.dataset.savedMode = saved.mode;
+      for (const payload of seriesPageCache.values()) {
+        for (const item of payload.seriesOptions || []) {
+          if (Number(item.id) === Number(seriesId)) item.search_mode = saved.mode;
+        }
+      }
+      showSoulseekarrNotification('Episode search format saved.', 'success');
+    } catch (err) {
+      if (previous) searchMode.value = previous;
+      showSoulseekarrNotification(err.message || 'Could not save episode search format', 'danger');
+    } finally {
+      searchMode.disabled = false;
+    }
+    return;
+  }
+
+  const toggle = event.target.closest?.('.series-download-toggle');
+  if (!toggle) return;
+  const enabled = toggle.checked;
+  const seriesId = toggle.dataset.seriesId;
+  const row = toggle.closest('.series-row');
+  toggle.disabled = true;
+  try {
+    const r = await fetch(`/api/series/${seriesId}/download`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({enabled}),
+    });
+    const saved = await apiData(r);
+    row?.classList.toggle('series-row-disabled', !enabled);
+    updateSeriesEnabledCount(enabled ? 1 : -1);
+    for (const payload of seriesPageCache.values()) {
+      for (const item of payload.seriesOptions || []) {
+        if (Number(item.id) === Number(seriesId)) item.download_enabled = enabled;
+      }
+    }
+    const message = enabled && saved.priorityPending
+      ? 'library entry enabled. It will be searched first in the next automatic cycle.'
+      : 'Library download setting saved.';
+    showSoulseekarrNotification(message, 'success');
+  } catch (err) {
+    toggle.checked = !enabled;
+    showSoulseekarrNotification(err.message || 'Could not save series setting', 'danger');
+  } finally {
+    toggle.disabled = false;
+  }
+});
+</script>
+{% endblock %}

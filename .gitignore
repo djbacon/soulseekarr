@@ -1,0 +1,43 @@
+# Public repository: include only runtime files and installation documentation.
+/*
+!/.gitignore
+!/.dockerignore
+!/Dockerfile
+!/docker-compose.example.yml
+!/requirements.txt
+!/README.md
+!/app/
+
+# Generated Python files and local tooling inside the application directory.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.fallow/
+node_modules/
+.DS_Store
+*.swp
+*.swo
+*~
+
+# Private settings, credentials, runtime state, and logs at any depth.
+.env
+.env.*
+settings.json
+secret.key
+*.key
+*.pem
+*.p12
+*.pfx
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.log
+config/
+downloads/
